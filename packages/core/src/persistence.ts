@@ -1,7 +1,9 @@
 import type { Operation, OperationStatus } from "./domain.js";
 import { assertOperationTransition } from "./domain.js";
 import { RuntimeError } from "./errors.js";
-import type { RecordEntry, RecordKind, Run, RuntimeEvent, Session } from "./contracts.js";
+import type {
+  RecordEntry, RecordKind, Run, RunStatus, RunSummary, RuntimeEvent, Session, SessionSummary,
+} from "./contracts.js";
 import type { KernelDatabase } from "./storage.js";
 import type { ArtifactMetadata } from "./artifacts.js";
 import type { ContextProjection, ModelAttempt, ModelAttemptStatus } from "./agent-contracts.js";
@@ -34,6 +36,25 @@ export class RuntimeRepository {
     return row ? { id: String(row.id), createdAt: String(row.created_at) } : undefined;
   }
 
+  listSessions(limit: number): readonly SessionSummary[] {
+    const rows = this.database.db.prepare(`SELECT
+      s.id, s.created_at,
+      max(s.created_at,
+        coalesce((SELECT max(coalesce(r.ended_at, r.started_at)) FROM runs r WHERE r.session_id = s.id), s.created_at),
+        coalesce((SELECT max(rec.created_at) FROM records rec WHERE rec.session_id = s.id), s.created_at)
+      ) AS updated_at,
+      (SELECT json_extract(rec.data_json, '$.text') FROM records rec
+        WHERE rec.session_id = s.id AND rec.kind = 'user' ORDER BY rec.sequence LIMIT 1) AS first_user_message,
+      (SELECT count(*) FROM records rec WHERE rec.session_id = s.id) AS record_count,
+      (SELECT count(*) FROM runs r WHERE r.session_id = s.id) AS run_count,
+      (SELECT count(*) FROM runs r WHERE r.session_id = s.id AND r.status = 'running') AS running_count,
+      (SELECT count(*) FROM runs r WHERE r.session_id = s.id AND r.status = 'completed') AS completed_count,
+      (SELECT count(*) FROM runs r WHERE r.session_id = s.id AND r.status = 'failed') AS failed_count,
+      (SELECT count(*) FROM runs r WHERE r.session_id = s.id AND r.status = 'cancelled') AS cancelled_count
+      FROM sessions s ORDER BY updated_at DESC, s.id DESC LIMIT ?`).all(limit) as Row[];
+    return rows.map(sessionSummaryFromRow);
+  }
+
   createRun(run: Run, operation: Operation, userRecord: RecordEntry, events: readonly RuntimeEvent[]): void {
     this.database.db.prepare("INSERT INTO runs(id, session_id, status, started_at) VALUES (?, ?, ?, ?)")
       .run(run.id, run.sessionId, run.status, run.startedAt);
@@ -47,6 +68,26 @@ export class RuntimeRepository {
     const row = this.database.db.prepare("SELECT id, session_id, status, started_at, ended_at, error FROM runs WHERE id = ?")
       .get(id) as Row | undefined;
     return row ? runFromRow(row) : undefined;
+  }
+
+  listRuns(sessionId: string, limit: number): readonly RunSummary[] {
+    const rows = this.database.db.prepare(`SELECT id, session_id, status, started_at, ended_at, error
+      FROM runs WHERE session_id = ? ORDER BY started_at DESC, id DESC LIMIT ?`).all(sessionId, limit) as Row[];
+    return rows.map((row) => {
+      const run = runFromRow(row);
+      const attempts = this.listModelAttempts(run.id);
+      const operations = this.listOperations(run.id);
+      const providerModels = new Map<string, { provider: string; model: string }>();
+      for (const attempt of attempts) {
+        const value = { provider: attempt.providerProfile.provider, model: attempt.providerProfile.model };
+        providerModels.set(`${value.provider}\0${value.model}`, value);
+      }
+      return { ...run, modelRequestCount: attempts.length,
+        retryCount: attempts.filter((attempt) => attempt.retryOfAttemptId !== undefined).length,
+        toolOperationCount: operations.filter((operation) => operation.kind === "tool").length,
+        providerModels: [...providerModels.values()].sort((a, b) =>
+          a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model)) };
+    });
   }
 
   getOperation(id: string): Operation | undefined {
@@ -227,6 +268,20 @@ function runFromRow(row: Row): Run {
   return { id: String(row.id), sessionId: String(row.session_id), status: String(row.status) as Run["status"],
     startedAt: String(row.started_at), ...(row.ended_at === null ? {} : { endedAt: String(row.ended_at) }),
     ...(row.error === null ? {} : { error: String(row.error) }) };
+}
+function sessionSummaryFromRow(row: Row): SessionSummary {
+  const runStatusCounts: Record<RunStatus, number> = {
+    running: Number(row.running_count), completed: Number(row.completed_count),
+    failed: Number(row.failed_count), cancelled: Number(row.cancelled_count),
+  };
+  return { id: String(row.id), createdAt: String(row.created_at), updatedAt: String(row.updated_at),
+    recordCount: Number(row.record_count), runCount: Number(row.run_count), runStatusCounts,
+    ...(typeof row.first_user_message === "string"
+      ? { firstUserMessage: summarizeFirstMessage(row.first_user_message) } : {}) };
+}
+function summarizeFirstMessage(value: string): string {
+  const firstLine = value.split(/\r?\n/, 1)[0]!.trim();
+  return firstLine.length <= 120 ? firstLine : `${firstLine.slice(0, 117)}...`;
 }
 function operationFromRow(row: Row): Operation {
   return { id: String(row.id), runId: String(row.run_id), kind: String(row.kind) as Operation["kind"],

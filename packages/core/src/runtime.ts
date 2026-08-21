@@ -7,7 +7,9 @@ import type {
 } from "./agent-contracts.js";
 import { ModelAttemptFailure, ProviderInvocationError } from "./agent-contracts.js";
 import { ArtifactStore, type ArtifactMetadata } from "./artifacts.js";
-import type { RecordEntry, RecordKind, Run, RuntimeEvent, Session, ToolResult } from "./contracts.js";
+import type {
+  RecordEntry, RecordKind, Run, RunSummary, RuntimeEvent, Session, SessionSummary, ToolResult,
+} from "./contracts.js";
 import { DefaultContextProjector } from "./context-projector.js";
 import type { Operation, OperationStatus } from "./domain.js";
 import { RuntimeError } from "./errors.js";
@@ -71,7 +73,14 @@ export class Runtime {
   }
 
   getSession(id: string): Session | undefined { return this.#repository.getSession(id); }
+  listSessions(options: { readonly limit?: number } = {}): readonly SessionSummary[] {
+    return this.#repository.listSessions(readLimit(options.limit));
+  }
   getRun(id: string): Run | undefined { return this.#repository.getRun(id); }
+  listRuns(sessionId: string, options: { readonly limit?: number } = {}): readonly RunSummary[] {
+    if (!this.getSession(sessionId)) throw new RuntimeError("not-found", `Unknown session: ${sessionId}`);
+    return this.#repository.listRuns(sessionId, readLimit(options.limit));
+  }
   getRecords(sessionId: string): readonly RecordEntry[] { return this.#repository.getRecords(sessionId); }
   getOperations(runId: string): readonly Operation[] { return this.#repository.listOperations(runId); }
   getModelAttempts(runId: string): readonly ModelAttempt[] { return this.#repository.listModelAttempts(runId); }
@@ -296,4 +305,12 @@ export class Runtime {
       this.#repository.markPublished(event.sequence, this.#system.clock.now());
     }
   }
+}
+
+function readLimit(value: number | undefined): number {
+  if (value === undefined) return 50;
+  if (!Number.isSafeInteger(value) || value < 1 || value > 100) {
+    throw new RuntimeError("validation", "Limit must be an integer from 1 through 100");
+  }
+  return value;
 }

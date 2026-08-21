@@ -39,6 +39,12 @@ async function route(request: IncomingMessage, response: ServerResponse) {
     send(response, 201, await runtime.createSession());
     return;
   }
+  if (request.method === "GET" && url.pathname === "/v1/sessions") {
+    const limit = readLimit(url);
+    if (limit === undefined) { send(response, 400, { error: "limit must be an integer from 1 through 100" }); return; }
+    send(response, 200, runtime.listSessions({ limit }));
+    return;
+  }
 
   const recordsMatch = /^\/v1\/sessions\/([^/]+)\/records$/.exec(url.pathname);
   if (request.method === "GET" && recordsMatch?.[1]) {
@@ -47,6 +53,13 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   }
 
   const runsMatch = /^\/v1\/sessions\/([^/]+)\/runs$/.exec(url.pathname);
+  if (request.method === "GET" && runsMatch?.[1]) {
+    const limit = readLimit(url);
+    if (limit === undefined) { send(response, 400, { error: "limit must be an integer from 1 through 100" }); return; }
+    if (!runtime.getSession(runsMatch[1])) { send(response, 404, { error: "Session not found" }); return; }
+    send(response, 200, runtime.listRuns(runsMatch[1], { limit }));
+    return;
+  }
   if (request.method === "POST" && runsMatch?.[1]) {
     const body = await readJson(request);
     if (!isRunBody(body)) {
@@ -105,6 +118,14 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   }
 
   send(response, 404, { error: "Not found" });
+}
+
+function readLimit(url: URL): number | undefined {
+  const value = url.searchParams.get("limit");
+  if (value === null) return 50;
+  if (!/^\d+$/.test(value)) return undefined;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 100 ? parsed : undefined;
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

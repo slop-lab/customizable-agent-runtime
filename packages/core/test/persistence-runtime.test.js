@@ -29,6 +29,47 @@ test("sessions, terminal runs, records, and operations survive restart", async (
   rmSync(directory, { recursive: true, force: true });
 });
 
+test("session and run summaries are durable, bounded, and distinguish retries from continuation", async () => {
+  const system = (() => { let id = 0; let tick = 0; return {
+    ids: { next: () => `summary-${++id}` },
+    clock: { now: () => `2026-08-21T00:00:${String(tick++).padStart(2, "0")}.000Z` },
+  }; })();
+  let invocation = 0;
+  const summaryProvider = providerFrom(async () => {
+    invocation++;
+    if (invocation === 1) return { content: [{ type: "tool-call", callId: "call", toolName: "effect", input: {} }] };
+    return { content: [{ type: "text", role: "assistant", text: "done" }] };
+  });
+  const loopingDriver = { id: "test.summary", version: "1", async run(context) {
+    const first = await context.invokeModel();
+    for (const content of first.content) await context.append(content);
+    await context.dispatch(first.content[0]);
+    const second = await context.invokeModel();
+    for (const content of second.content) await context.append(content);
+  } };
+  const tool = { description: { name: "effect", description: "effect" }, async execute() { return { output: "ok" }; } };
+  const runtime = new Runtime(summaryProvider, loopingDriver, new ToolDispatcher([tool]), { system });
+  const empty = await runtime.createSession("empty");
+  const session = await runtime.createSession("summary");
+  const run = await runtime.run(session.id, "first line\nsecond line");
+
+  const sessions = runtime.listSessions();
+  assert.deepEqual(sessions.map((value) => value.id), [session.id, empty.id]);
+  assert.equal(sessions[0].firstUserMessage, "first line");
+  assert.equal(sessions[0].recordCount, 4);
+  assert.equal(sessions[0].runStatusCounts.completed, 1);
+  const [summary] = runtime.listRuns(session.id);
+  assert.equal(summary.id, run.id);
+  assert.equal(summary.modelRequestCount, 2);
+  assert.equal(summary.retryCount, 0);
+  assert.equal(summary.toolOperationCount, 1);
+  assert.deepEqual(summary.providerModels, [{ provider: "fake", model: "fake" }]);
+  assert.equal(runtime.listSessions({ limit: 1 }).length, 1);
+  assert.throws(() => runtime.listSessions({ limit: 0 }), /Limit must be/);
+  assert.throws(() => runtime.listRuns("missing"), /Unknown session/);
+  runtime.close();
+});
+
 test("a command failure rolls back materialized state and its receipt", () => {
   const database = new KernelDatabase(":memory:");
   const repository = new RuntimeRepository(database);

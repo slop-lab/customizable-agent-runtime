@@ -18,6 +18,16 @@ test("daemon recovers persisted session history after a process restart", async 
   });
   assert.equal(runResponse.status, 201);
   assert.equal((await runResponse.json()).status, "completed");
+  const sessionsResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions?limit=10`);
+  assert.equal(sessionsResponse.status, 200);
+  const sessions = await sessionsResponse.json();
+  assert.equal(sessions[0].id, session.id);
+  assert.equal(sessions[0].runStatusCounts.completed, 1);
+  const runsResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions/${session.id}/runs`);
+  assert.equal(runsResponse.status, 200);
+  const runs = await runsResponse.json();
+  assert.equal(runs[0].modelRequestCount, 1);
+  assert.equal(runs[0].retryCount, 0);
   await stopDaemon(daemon, "SIGKILL");
 
   daemon = await startDaemon(dataDirectory, port);

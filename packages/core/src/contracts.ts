@@ -91,6 +91,14 @@ export interface Session {
   readonly createdAt: string;
 }
 
+export interface SessionSummary extends Session {
+  readonly updatedAt: string;
+  readonly firstUserMessage?: string;
+  readonly recordCount: number;
+  readonly runCount: number;
+  readonly runStatusCounts: Readonly<Record<RunStatus, number>>;
+}
+
 export interface Run {
   readonly id: Id;
   readonly sessionId: Id;
@@ -98,6 +106,16 @@ export interface Run {
   readonly startedAt: string;
   readonly endedAt?: string;
   readonly error?: string;
+}
+
+export interface RunSummary extends Run {
+  readonly modelRequestCount: number;
+  readonly retryCount: number;
+  readonly toolOperationCount: number;
+  readonly providerModels: readonly {
+    readonly provider: string;
+    readonly model: string;
+  }[];
 }
 
 export type RecordKind = "user" | "assistant" | "tool-call" | "tool-result" | "provider-native" | "error";
