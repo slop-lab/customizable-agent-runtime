@@ -77,9 +77,11 @@ export class OpenRouterChatProvider implements ModelProvider {
     request.recordRequest(body);
     let responseId: string | undefined; let finishReason: string | undefined;
     let usage: Record<string, unknown> | undefined; let role = "assistant"; let text = "";
+    let receivedChunk = false;
     const nativeDelta: Record<string, unknown> = {};
     const toolCalls = new Map<number, StreamToolCall>();
     for await (const payload of this.options.transport.stream(body, request.signal)) {
+      receivedChunk = true;
       request.recordEvent("chat.completion.chunk", payload);
       const chunk = asObject(payload);
       const streamError = asObjectOrUndefined(chunk.error);
@@ -98,6 +100,8 @@ export class OpenRouterChatProvider implements ModelProvider {
         appendToolCall(toolCalls, asObject(value));
       }
     }
+    if (!receivedChunk) throw new ProviderInvocationError("openrouter.empty-stream",
+      "OpenRouter stream completed without a semantic response chunk", true);
     const assembledCalls = [...toolCalls.entries()].sort(([a], [b]) => a - b).map(([index, call]) => {
       if (!call.id || !call.name) throw new ProviderInvocationError("openrouter.invalid-tool-call",
         `Streamed tool call ${index} is missing an ID or function name`, false);

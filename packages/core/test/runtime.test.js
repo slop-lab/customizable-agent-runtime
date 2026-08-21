@@ -75,6 +75,33 @@ test("cancellation leaves no post-cancel assistant continuation", async () => {
   runtime.close();
 });
 
+test("cancellation during a tool leaves no post-cancel tool result continuation", async () => {
+  const provider = providerFrom(async () => ({ content: [
+    { type: "tool-call", callId: "call", toolName: "effect", input: {} },
+  ] }));
+  let toolStarted;
+  const started = new Promise((resolve) => { toolStarted = resolve; });
+  const tool = { description: { name: "effect", description: "effect" }, async execute(_input, context) {
+    toolStarted();
+    await new Promise((_resolve, reject) => context.signal.addEventListener("abort",
+      () => reject(context.signal.reason), { once: true }));
+    return { output: "must not appear" };
+  } };
+  const runtime = createTestRuntime(provider, [tool], { system: deterministicSystem() });
+  const session = await runtime.createSession("create-session");
+  const execution = await runtime.startRun(session.id, "cancel tool");
+  await started;
+  execution.cancel();
+  const run = await execution.completion;
+  assert.equal(run.status, "cancelled");
+  assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user", "tool-call"]);
+  assert.deepEqual(runtime.getOperations(run.id).map(({ kind, status }) => ({ kind, status })), [
+    { kind: "run", status: "cancelled" }, { kind: "model", status: "completed" },
+    { kind: "tool", status: "cancelled" },
+  ]);
+  runtime.close();
+});
+
 test("a driver can make tool failure terminal without changing runtime policy", async () => {
   const provider = providerFrom(async () => ({ content: [
     { type: "tool-call", callId: "call", toolName: "effect", input: {} },

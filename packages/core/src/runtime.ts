@@ -285,6 +285,7 @@ export class Runtime {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await this.#finishTool(operation, signal.aborted ? "cancelled" : "failed", undefined, message);
+      if (signal.aborted) throw signal.reason ?? new RuntimeError("cancelled", `Tool operation cancelled: ${operation.id}`);
       const result = { output: message, isError: true };
       await this.#appendNormalized(sessionId, runId, { type: "tool-result", callId: call.callId,
         output: message, isError: true });

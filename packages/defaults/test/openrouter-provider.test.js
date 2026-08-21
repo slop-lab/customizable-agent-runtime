@@ -103,6 +103,13 @@ test("OpenRouter adapter classifies streamed error envelopes after preserving th
   assert.equal(trace.events.length, 1);
 });
 
+test("OpenRouter adapter makes an empty semantic stream retryable", async () => {
+  const provider = new OpenRouterChatProvider({ model: "model", endpoint: "endpoint", credentialHandle: "env:KEY",
+    transport: streamOf() });
+  await assert.rejects(() => provider.invoke(invocation().value),
+    (error) => error.code === "openrouter.empty-stream" && error.retryable === true);
+});
+
 test("OpenRouter transport keeps credentials internal and does not retry 429", async () => {
   let authorization;
   const credentials = new EnvironmentCredentialResolver({ KEY: "secret" });
