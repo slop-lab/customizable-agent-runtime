@@ -4,9 +4,10 @@ import type {
 } from "@car/core";
 import { ProviderInvocationError } from "@car/core";
 import type { CredentialResolver } from "./credentials.js";
+import { parseSseJson } from "./sse.js";
 
 export interface OpenRouterTransport {
-  send(body: JsonObject, signal: AbortSignal): Promise<unknown>;
+  stream(body: JsonObject, signal: AbortSignal): AsyncIterable<unknown>;
 }
 
 export class OpenRouterFetchTransport implements OpenRouterTransport {
@@ -17,7 +18,7 @@ export class OpenRouterFetchTransport implements OpenRouterTransport {
     private readonly fetchImplementation: typeof fetch = fetch,
   ) {}
 
-  async send(body: JsonObject, signal: AbortSignal): Promise<unknown> {
+  async *stream(body: JsonObject, signal: AbortSignal): AsyncIterable<unknown> {
     let response: Response;
     try {
       response = await this.fetchImplementation(this.endpoint, { method: "POST", signal,
@@ -33,9 +34,16 @@ export class OpenRouterFetchTransport implements OpenRouterTransport {
         `OpenRouter request failed (${response.status}): ${safeErrorMessage(responseText)}`,
         response.status >= 500, { status: response.status });
     }
-    try { return await response.json() as unknown; }
-    catch (error) { throw new ProviderInvocationError("openrouter.invalid-json",
-      `Invalid OpenRouter response JSON: ${error instanceof Error ? error.message : String(error)}`, false); }
+    if (!response.body) throw new ProviderInvocationError("transport.empty", "OpenRouter response has no stream body", true);
+    try {
+      yield* parseSseJson(response.body, signal, { invalidJson: (_value, error) =>
+        new ProviderInvocationError("openrouter.invalid-json",
+          `Invalid OpenRouter event JSON: ${error instanceof Error ? error.message : String(error)}`, false) });
+    } catch (error) {
+      if (error instanceof ProviderInvocationError) throw error;
+      if (signal.aborted) throw new ProviderInvocationError("provider.cancelled", "OpenRouter request cancelled", false);
+      throw new ProviderInvocationError("transport.network", error instanceof Error ? error.message : String(error), true);
+    }
   }
 }
 
@@ -50,7 +58,7 @@ export class OpenRouterChatProvider implements ModelProvider {
   readonly id = "openrouter.chat-completions";
   readonly profile: ProviderProfile;
   readonly capabilities: ProviderCapabilitiesV1 = { version: 1, values: {
-    "core.streaming.text": { supported: false },
+    "core.streaming.text": { supported: true },
     "core.tools.calls": { supported: true, constraints: { parallel: true } },
     "core.cancellation": { supported: true },
     "core.provider-native": { supported: true },
@@ -63,30 +71,79 @@ export class OpenRouterChatProvider implements ModelProvider {
   }
 
   async invoke(request: ModelInvocationRequest): Promise<ProviderTurn> {
-    const body = { model: this.options.model, messages: projectMessages(request.context.content),
+    const body = { model: this.options.model, stream: true, messages: projectMessages(request.context.content),
       tools: request.tools.map((tool) => ({ type: "function", function: { name: tool.name,
         description: tool.description, parameters: tool.inputSchema ?? { type: "object", additionalProperties: true } } })) };
     request.recordRequest(body);
-    const payload = await this.options.transport.send(body, request.signal);
-    request.recordEvent("chat.completion", payload);
-    const response = asObject(payload);
-    const choice = asObject(Array.isArray(response.choices) ? response.choices[0] : undefined);
-    const message = asObject(choice.message);
-    const content: NormalizedContent[] = [];
-    if (typeof message.content === "string" && message.content.length > 0) {
-      content.push({ type: "text", role: "assistant", text: message.content });
+    let responseId: string | undefined; let finishReason: string | undefined;
+    let usage: Record<string, unknown> | undefined; let role = "assistant"; let text = "";
+    const nativeDelta: Record<string, unknown> = {};
+    const toolCalls = new Map<number, StreamToolCall>();
+    for await (const payload of this.options.transport.stream(body, request.signal)) {
+      request.recordEvent("chat.completion.chunk", payload);
+      const chunk = asObject(payload);
+      const streamError = asObjectOrUndefined(chunk.error);
+      if (streamError) throw streamInvocationError(streamError);
+      if (typeof chunk.id === "string") responseId ??= chunk.id;
+      const chunkUsage = asObjectOrUndefined(chunk.usage); if (chunkUsage) usage = chunkUsage;
+      const choices = Array.isArray(chunk.choices) ? chunk.choices.map(asObject) : [];
+      const choice = choices.find((value) => value.index === 0) ?? choices[0];
+      if (!choice) continue;
+      if (typeof choice.finish_reason === "string") finishReason = choice.finish_reason;
+      const delta = asObject(choice.delta);
+      if (typeof delta.role === "string") role = delta.role;
+      if (typeof delta.content === "string") text += delta.content;
+      appendNativeDelta(nativeDelta, delta);
+      if (Array.isArray(delta.tool_calls)) for (const value of delta.tool_calls) {
+        appendToolCall(toolCalls, asObject(value));
+      }
     }
-    if (Array.isArray(message.tool_calls)) for (const value of message.tool_calls) {
+    const assembledCalls = [...toolCalls.entries()].sort(([a], [b]) => a - b).map(([index, call]) => {
+      if (!call.id || !call.name) throw new ProviderInvocationError("openrouter.invalid-tool-call",
+        `Streamed tool call ${index} is missing an ID or function name`, false);
+      return { id: call.id, type: call.type || "function", function: { name: call.name, arguments: call.arguments } };
+    });
+    const message = { role, content: text || null, ...nativeDelta,
+      ...(assembledCalls.length === 0 ? {} : { tool_calls: assembledCalls }) };
+    const content: NormalizedContent[] = [];
+    if (text.length > 0) content.push({ type: "text", role: "assistant", text });
+    for (const value of assembledCalls) {
       const call = asObject(value); const fn = asObject(call.function);
       if (typeof call.id === "string" && typeof fn.name === "string") content.push({ type: "tool-call",
         callId: call.id, toolName: fn.name, input: parseArguments(fn.arguments) });
     }
     content.push({ type: "provider-native", provider: "openrouter.chat", value: message });
-    const usage = asObjectOrUndefined(response.usage);
-    return { content, ...(typeof choice.finish_reason === "string" ? { finishReason: choice.finish_reason } : {}),
+    return { content, ...(finishReason === undefined ? {} : { finishReason }),
       ...(usage ? { usage, normalizedUsage: normalizeOpenRouterUsage(usage) } : {}),
-      ...(typeof response.id === "string" ? { providerResponseId: response.id } : {}) };
+      ...(responseId === undefined ? {} : { providerResponseId: responseId }) };
   }
+}
+
+interface StreamToolCall { id: string; type: string; name: string; arguments: string }
+function appendToolCall(calls: Map<number, StreamToolCall>, delta: Record<string, unknown>): void {
+  const index = typeof delta.index === "number" && Number.isInteger(delta.index) ? delta.index : calls.size;
+  const call = calls.get(index) ?? { id: "", type: "", name: "", arguments: "" };
+  const fn = asObject(delta.function);
+  if (typeof delta.id === "string") call.id += delta.id;
+  if (typeof delta.type === "string") call.type = delta.type;
+  if (typeof fn.name === "string") call.name += fn.name;
+  if (typeof fn.arguments === "string") call.arguments += fn.arguments;
+  calls.set(index, call);
+}
+function appendNativeDelta(target: Record<string, unknown>, delta: Record<string, unknown>): void {
+  for (const [key, value] of Object.entries(delta)) {
+    if (key === "role" || key === "content" || key === "tool_calls") continue;
+    if (typeof value === "string" && typeof target[key] === "string") target[key] = `${target[key]}${value}`;
+    else if (Array.isArray(value) && Array.isArray(target[key])) target[key] = [...target[key], ...value];
+    else target[key] = structuredClone(value);
+  }
+}
+function streamInvocationError(error: Record<string, unknown>): ProviderInvocationError {
+  const numericCode = typeof error.code === "number" ? error.code : undefined;
+  const code = numericCode === undefined ? String(error.code ?? "error") : String(numericCode);
+  const message = typeof error.message === "string" ? error.message : "OpenRouter stream failed";
+  return new ProviderInvocationError(`openrouter.stream.${code}`, message, numericCode !== undefined && numericCode >= 500,
+    numericCode === undefined ? undefined : { status: numericCode });
 }
 
 export function normalizeOpenRouterUsage(usage: Readonly<Record<string, unknown>>): NormalizedUsageV1 {

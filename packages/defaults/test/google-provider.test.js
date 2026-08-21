@@ -25,6 +25,16 @@ test("SSE parser removes framing and preserves semantic JSON payloads", async ()
   assert.deepEqual(values, [{ event_type: "step.delta", delta: { type: "text", text: "hi" } }]);
 });
 
+test("SSE parser handles split CRLF frames, comments, multiline data, and DONE", async () => {
+  const encoder = new TextEncoder();
+  const pieces = [": heartbeat\r\nda", "ta: {\"event_type\":\"split\",\r\n",
+    "data: \"value\":1}\r\n\r\ndata: [DO", "NE]\r\n\r\n"];
+  const stream = new ReadableStream({ start(controller) { for (const piece of pieces) controller.enqueue(encoder.encode(piece)); controller.close(); } });
+  const values = [];
+  for await (const value of parseSseJson(stream, new AbortController().signal)) values.push(value);
+  assert.deepEqual(values, [{ event_type: "split", value: 1 }]);
+});
+
 test("Google adapter projects streamed text while preserving every semantic event", async () => {
   const semanticEvents = [
     { event_type: "step.start", index: 0, step: { type: "model_output", content: [] } },

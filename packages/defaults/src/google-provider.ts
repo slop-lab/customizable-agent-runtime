@@ -4,6 +4,9 @@ import type {
 } from "@car/core";
 import { ProviderInvocationError } from "@car/core";
 import type { CredentialResolver } from "./credentials.js";
+import { parseSseJson } from "./sse.js";
+
+export { parseSseJson } from "./sse.js";
 
 export interface GoogleInteractionsTransport {
   stream(body: JsonObject, signal: AbortSignal): AsyncIterable<unknown>;
@@ -38,7 +41,9 @@ export class GoogleFetchInteractionsTransport implements GoogleInteractionsTrans
         { status: response.status });
     }
     if (!response.body) throw new ProviderInvocationError("transport.empty", "Google response has no stream body", true);
-    yield* parseSseJson(response.body, signal);
+    yield* parseSseJson(response.body, signal, { invalidJson: (_value, error) =>
+      new ProviderInvocationError("google.invalid-json",
+        `Invalid Google event JSON: ${error instanceof Error ? error.message : String(error)}`, false) });
   }
 }
 
@@ -99,27 +104,6 @@ export function normalizeGoogleUsage(usage: Readonly<Record<string, unknown>>): 
   return compactUsage({ version: 1, inputTokens: numberValue(usage.total_input_tokens),
     outputTokens: numberValue(usage.total_output_tokens), reasoningTokens: numberValue(usage.total_thought_tokens),
     cacheReadTokens: numberValue(usage.total_cached_tokens), totalTokens: numberValue(usage.total_tokens) });
-}
-
-export async function* parseSseJson(stream: ReadableStream<Uint8Array>, signal: AbortSignal): AsyncIterable<unknown> {
-  const decoder = new TextDecoder();
-  let buffer = "";
-  for await (const bytes of stream) {
-    signal.throwIfAborted();
-    buffer += decoder.decode(bytes, { stream: true }).replaceAll("\r\n", "\n");
-    while (true) {
-      const boundary = buffer.indexOf("\n\n");
-      if (boundary < 0) break;
-      const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
-      const data = frame.split("\n").filter((line) => line.startsWith("data:"))
-        .map((line) => line.slice(5).trimStart()).join("\n");
-      if (data && data !== "[DONE]") yield parseJson(data);
-    }
-  }
-  buffer += decoder.decode();
-  const data = buffer.split("\n").filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart()).join("\n");
-  if (data && data !== "[DONE]") yield parseJson(data);
 }
 
 function projectGoogleInput(content: readonly NormalizedContent[]): unknown[] {

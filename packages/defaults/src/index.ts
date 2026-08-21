@@ -15,6 +15,7 @@ export { LocalDevelopmentWorker } from "./local-worker.js";
 export * from "./credentials.js";
 export * from "./google-provider.js";
 export * from "./openrouter-provider.js";
+export * from "./sse.js";
 
 export type FakeProviderAction =
   | { readonly type: "turn"; readonly turn: ProviderTurn }
