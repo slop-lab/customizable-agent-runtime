@@ -80,6 +80,31 @@ test("demo driver does not schedule a retry after cancellation wins a provider r
   runtime.close();
 });
 
+test("demo driver cancellation during retry backoff starts no additional attempt", async () => {
+  let backoffStarted;
+  const started = new Promise((resolve) => { backoffStarted = resolve; });
+  const provider = new FakeProvider([
+    { type: "failure", code: "temporary", message: "try later", retryable: true },
+  ]);
+  const driver = new DemoAgentDriver({ sleep: async (_milliseconds, signal) => {
+    backoffStarted();
+    await new Promise((_resolve, reject) => signal.addEventListener("abort",
+      () => reject(signal.reason), { once: true }));
+  } });
+  const runtime = createDefaultRuntime({ provider, driver,
+    worker: new FakeWorker(() => ({ ok: true, output: "unused" })) });
+  const session = await runtime.createSession("session");
+  const execution = await runtime.startRun(session.id, "cancel backoff");
+  await started; execution.cancel();
+  const run = await execution.completion;
+  assert.equal(run.status, "cancelled");
+  const attempts = runtime.getModelAttempts(run.id);
+  assert.equal(attempts.length, 1);
+  assert.deepEqual(attempts[0].retryDecision,
+    { retry: true, reason: "temporary", retryNumber: 1, backoffMs: 250 });
+  runtime.close();
+});
+
 test("demo driver stops repeated identical tool calls", async () => {
   const call = { type: "tool-call", callId: "call", toolName: "read", input: { path: "README.md" } };
   const provider = { id: "repeat", profile: { id: "repeat", provider: "fake", model: "repeat",
