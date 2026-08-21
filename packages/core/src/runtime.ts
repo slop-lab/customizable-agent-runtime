@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type {
   ModelContent,
   Provider,
@@ -8,6 +7,7 @@ import type {
   RuntimeEvent,
   Session,
 } from "./contracts.js";
+import { defaultRuntimeSystem, type RuntimeSystem } from "./system.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
 
 export class Runtime {
@@ -20,10 +20,11 @@ export class Runtime {
   constructor(
     private readonly provider: Provider,
     private readonly tools: ToolDispatcher,
+    private readonly system: RuntimeSystem = defaultRuntimeSystem,
   ) {}
 
   createSession(): Session {
-    const session = { id: randomUUID(), createdAt: new Date().toISOString() };
+    const session = { id: this.system.ids.next(), createdAt: this.system.clock.now() };
     this.#sessions.set(session.id, session);
     this.#records.set(session.id, []);
     this.#emit("session.created", session);
@@ -67,7 +68,7 @@ export class Runtime {
 
     const controller = new AbortController();
     const started: Run = {
-      id: randomUUID(), sessionId, status: "running", startedAt: new Date().toISOString(),
+      id: this.system.ids.next(), sessionId, status: "running", startedAt: this.system.clock.now(),
     };
     this.#runs.set(started.id, started);
     this.#controllers.set(started.id, controller);
@@ -109,7 +110,7 @@ export class Runtime {
 
   #append(sessionId: string, runId: string, kind: RecordKind, data: unknown) {
     const record: RecordEntry = {
-      id: randomUUID(), sessionId, runId, kind, data, createdAt: new Date().toISOString(),
+      id: this.system.ids.next(), sessionId, runId, kind, data, createdAt: this.system.clock.now(),
     };
     this.#records.get(sessionId)?.push(record);
     this.#emit("record.appended", record);
@@ -119,7 +120,7 @@ export class Runtime {
     const finished: Run = {
       ...started,
       status,
-      endedAt: new Date().toISOString(),
+      endedAt: this.system.clock.now(),
       ...(error === undefined ? {} : { error }),
     };
     this.#runs.set(finished.id, finished);
@@ -129,7 +130,7 @@ export class Runtime {
 
   #emit(type: RuntimeEvent["type"], data: unknown) {
     const event: RuntimeEvent = {
-      id: randomUUID(), type, data, occurredAt: new Date().toISOString(),
+      id: this.system.ids.next(), type, data, occurredAt: this.system.clock.now(),
     };
     for (const listener of this.#listeners) listener(event);
   }

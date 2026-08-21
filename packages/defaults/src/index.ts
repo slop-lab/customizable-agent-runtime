@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import type { ModelRequest, Provider, Tool } from "@car/core";
+import type { ModelChunk, ModelRequest, Provider, RuntimeSystem, Tool } from "@car/core";
 import { Runtime, ToolDispatcher } from "@car/core";
 
 export class FakeProvider implements Provider {
@@ -11,11 +11,37 @@ export class FakeProvider implements Provider {
     cancellation: true,
   } as const;
 
-  async *stream(request: ModelRequest) {
+  constructor(private readonly script?: readonly FakeProviderStep[]) {}
+
+  async *stream(request: ModelRequest): AsyncIterable<ModelChunk> {
     request.signal.throwIfAborted();
+    if (this.script) {
+      for (const step of this.script) {
+        request.signal.throwIfAborted();
+        if (step.type === "chunk") yield step.chunk;
+        else if (step.type === "delay") await abortableDelay(step.milliseconds, request.signal);
+        else throw new Error(step.message);
+      }
+      return;
+    }
     const latest = [...request.records].reverse().find((record) => record.kind === "user");
     yield { content: { type: "text" as const, text: `Fake provider received: ${JSON.stringify(latest?.data)}` } };
   }
+}
+
+export type FakeProviderStep =
+  | { readonly type: "chunk"; readonly chunk: ModelChunk }
+  | { readonly type: "delay"; readonly milliseconds: number }
+  | { readonly type: "failure"; readonly message: string };
+
+function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, milliseconds);
+    signal.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason ?? new Error("Cancelled"));
+    }, { once: true });
+  });
 }
 
 const readTool: Tool = {
@@ -31,6 +57,6 @@ function isPathInput(input: unknown): input is { path: string } {
     typeof (input as { path?: unknown }).path === "string";
 }
 
-export function createDefaultRuntime(): Runtime {
-  return new Runtime(new FakeProvider(), new ToolDispatcher([readTool]));
+export function createDefaultRuntime(system?: RuntimeSystem): Runtime {
+  return new Runtime(new FakeProvider(), new ToolDispatcher([readTool]), system);
 }
