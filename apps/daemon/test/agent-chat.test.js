@@ -67,3 +67,22 @@ test("startup resume rejects an unknown session instead of creating an empty one
     dataDirectory: "/data", initialSessionId: "missing" }), /Unknown session/);
   assert.equal(created, false);
 });
+
+test("session changes reject pending input and validate unknown IDs", async () => {
+  const sessions = new Map(); let created = 0;
+  const runtime = {
+    async createSession() {
+      const session = { id: `session-${++created}`, createdAt: "now" };
+      sessions.set(session.id, session); return session;
+    },
+    getSession(id) { return sessions.get(id); },
+  };
+  const terminal = new FakeTerminal(["draft", "/new", "/resume missing", "/cancel", "/resume missing", "/new", "/id", "/exit"]);
+  const output = new FakeOutput();
+  await runAgentChat({ runtime, terminal, output, dataDirectory: "/data" });
+  assert.equal(created, 2);
+  assert.match(output.value, /discard or send the pending prompt before changing sessions/);
+  assert.match(output.value, /unknown session: missing/);
+  assert.match(output.value, /new session session-2/);
+  assert.match(output.value, /\nsession-2\n/);
+});
