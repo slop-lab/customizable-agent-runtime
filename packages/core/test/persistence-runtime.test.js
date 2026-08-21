@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { KernelDatabase, Runtime, ToolDispatcher } from "../dist/index.js";
+import { KernelDatabase, Runtime, RuntimeRepository, ToolDispatcher } from "../dist/index.js";
 
 const provider = {
   id: "fake",
@@ -29,6 +29,18 @@ test("sessions, terminal runs, records, and operations survive restart", async (
   assert.deepEqual(runtime.getOperations(run.id).map((operation) => operation.status), ["completed"]);
   runtime.close();
   rmSync(directory, { recursive: true, force: true });
+});
+
+test("a command failure rolls back materialized state and its receipt", () => {
+  const database = new KernelDatabase(":memory:");
+  const repository = new RuntimeRepository(database);
+  assert.throws(() => repository.command("failed-command", "now", () => {
+    database.db.prepare("INSERT INTO sessions(id, created_at) VALUES ('partial', 'now')").run();
+    throw new Error("before commit");
+  }));
+  assert.equal(database.db.prepare("SELECT count(*) count FROM sessions").get().count, 0);
+  assert.equal(database.db.prepare("SELECT count(*) count FROM command_receipts").get().count, 0);
+  database.close();
 });
 
 test("committed outbox events publish after a restart", async () => {

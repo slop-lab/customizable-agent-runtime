@@ -45,3 +45,17 @@ test("validation occurs before execution and redirected calls re-enter middlewar
   assert.deepEqual(await dispatcher.dispatch("source", {}, context), { output: "redirected" });
   assert.equal(executions, 1);
 });
+
+test("middleware can replace valid input and deny before side effects", async () => {
+  const observed = [];
+  const target = { description: { name: "target", description: "target",
+    validateInput: (input) => typeof input === "string" ? undefined : "string required" },
+    async execute(input) { observed.push(input); return { output: input }; } };
+  const replacing = { async before(_description, input) {
+    return input === "original" ? { type: "replace", input: "replaced" } : { type: "continue" };
+  } };
+  assert.deepEqual(await new ToolDispatcher([target], [replacing]).dispatch("target", "original", context), { output: "replaced" });
+  const denying = { async before() { return { type: "deny", message: "policy denied" }; } };
+  await assert.rejects(() => new ToolDispatcher([target], [denying]).dispatch("target", "denied", context), /policy denied/);
+  assert.deepEqual(observed, ["replaced"]);
+});

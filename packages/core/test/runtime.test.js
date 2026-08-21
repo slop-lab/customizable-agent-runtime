@@ -81,3 +81,19 @@ test("cancellation leaves no post-cancel assistant continuation", async () => {
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user"]);
   assert.deepEqual(runtime.getOperations(run.id).map((operation) => operation.status), ["cancelled"]);
 });
+
+test("failed tool execution leaves a failed tool operation", async () => {
+  const provider = {
+    id: "fake",
+    capabilities: { streaming: true, toolCalls: true, parallelToolCalls: false, cancellation: true },
+    async *stream() { yield { content: { type: "tool-call", callId: "call", toolName: "effect", input: {} } }; },
+  };
+  const tool = { description: { name: "effect", description: "effect" }, async execute() { throw new Error("uncertain side effect"); } };
+  const runtime = new Runtime(provider, new ToolDispatcher([tool]), deterministicSystem());
+  const session = await runtime.createSession("create-session");
+  const run = await runtime.run(session.id, "hello");
+  assert.equal(run.status, "failed");
+  assert.deepEqual(runtime.getOperations(run.id).map(({ kind, status }) => ({ kind, status })), [
+    { kind: "run", status: "failed" }, { kind: "tool", status: "failed" },
+  ]);
+});

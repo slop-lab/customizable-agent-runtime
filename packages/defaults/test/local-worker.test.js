@@ -3,7 +3,9 @@ import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { FakeWorker } from "@car/core";
 import { LocalDevelopmentWorker } from "../dist/index.js";
+import { workerConformance } from "./worker-conformance.js";
 
 function fixture(options = {}) {
   const root = mkdtempSync(join(tmpdir(), "car-worker-"));
@@ -14,15 +16,15 @@ function request(value) {
   return { operationId: "operation", workspace: "workspace", deadline: new Date(Date.now() + 5_000).toISOString(), ...value };
 }
 
-test("local worker reads and shells only through its workspace capability", async () => {
+workerConformance("local development worker", () => {
   const { root, worker } = fixture();
-  const signal = new AbortController().signal;
-  assert.deepEqual(await worker.execute(request({ type: "readFile", path: "hello.txt" }), signal), { ok: true, output: "hello worker" });
-  const shell = await worker.execute(request({ type: "shell", command: "printf shell" }), signal);
-  assert.deepEqual(shell, { ok: true, output: "shell" });
-  assert.equal((await worker.execute({ ...request({ type: "readFile", path: "hello.txt" }), workspace: "other" }, signal)).code, "invalid-scope");
-  rmSync(root, { recursive: true, force: true });
+  return { worker, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 });
+
+workerConformance("fake worker", () => ({ worker: new FakeWorker((value) => {
+  if (value.workspace !== "workspace") return { ok: false, code: "invalid-scope", message: "scope" };
+  return { ok: true, output: value.type === "readFile" ? "hello worker" : "shell" };
+}) }));
 
 test("local worker rejects traversal and symlink escape", async () => {
   const { root, worker } = fixture();
@@ -43,5 +45,10 @@ test("local worker enforces deadline, cancellation, and output limit", async () 
   controller.abort();
   assert.equal((await worker.execute(request({ type: "shell", command: "true" }), controller.signal)).code, "cancelled");
   assert.equal((await worker.execute(request({ type: "readFile", path: "hello.txt" }), new AbortController().signal)).code, "output-limit");
+  const timedOut = await worker.execute({ ...request({ type: "shell", command: "sleep 1" }),
+    deadline: new Date(Date.now() + 30).toISOString() }, new AbortController().signal);
+  assert.equal(timedOut.code, "timeout");
+  const tooLarge = await worker.execute(request({ type: "shell", command: "printf 123456789" }), new AbortController().signal);
+  assert.equal(tooLarge.code, "output-limit");
   rmSync(root, { recursive: true, force: true });
 });
