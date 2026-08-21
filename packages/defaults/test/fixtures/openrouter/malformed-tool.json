@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "malformed-tool",
+  "responses": [
+    { "status": 200, "request": { "model": "fixture-model", "stream": true }, "chunks": [
+      { "id": "malformed-response", "choices": [{ "index": 0, "delta": { "role": "assistant", "tool_calls": [{ "index": 0, "id": "bad-call", "type": "function", "function": { "name": "read", "arguments": "{" } }] }, "finish_reason": "tool_calls" }] }
+    ] }
+  ]
+}

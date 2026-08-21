@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "terminal-429",
+  "responses": [
+    { "status": 429, "request": { "model": "fixture-model", "stream": true }, "json": { "error": { "message": "fixture limited" } } }
+  ]
+}

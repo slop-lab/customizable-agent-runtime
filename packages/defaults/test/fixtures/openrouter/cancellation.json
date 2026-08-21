@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "name": "cancellation",
+  "responses": [
+    { "status": 200, "request": { "model": "fixture-model", "stream": true }, "delayMs": 1000, "chunks": [
+      { "id": "too-late", "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "must not persist" }, "finish_reason": "stop" }] }
+    ] }
+  ]
+}

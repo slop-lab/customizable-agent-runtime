@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "name": "retry-5xx",
+  "responses": [
+    { "status": 503, "request": { "model": "fixture-model", "stream": true }, "json": { "error": { "message": "fixture unavailable" } } },
+    { "status": 200, "request": { "model": "fixture-model", "stream": true }, "chunks": [
+      { "id": "retry-response", "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "recovered" }, "finish_reason": "stop" }] }
+    ] }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "name": "tool-loop",
+  "responses": [
+    {
+      "status": 200,
+      "request": { "model": "fixture-model", "stream": true, "messages": [{ "role": "user", "content": "read fixture" }] },
+      "chunks": [
+        { "id": "tool-response", "choices": [{ "index": 0, "delta": { "role": "assistant", "tool_calls": [{ "index": 0, "id": "fixture-call", "type": "function", "function": { "name": "read", "arguments": "{\"path\":\"README.md\"}" } }] }, "finish_reason": "tool_calls" }] },
+        { "id": "tool-response", "choices": [], "usage": { "prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6 } }
+      ]
+    },
+    {
+      "status": 200,
+      "request": { "model": "fixture-model", "stream": true },
+      "chunks": [
+        { "id": "final-response", "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "read completed" }, "finish_reason": "stop" }] },
+        { "id": "final-response", "choices": [], "usage": { "prompt_tokens": 8, "completion_tokens": 2, "total_tokens": 10 } }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "text-success",
+  "responses": [
+    {
+      "status": 200,
+      "request": { "model": "fixture-model", "stream": true, "messages": [{ "role": "user", "content": "hello" }] },
+      "chunks": [
+        { "id": "text-response", "choices": [{ "index": 0, "delta": { "role": "assistant", "content": "fixture " } }] },
+        { "id": "text-response", "choices": [{ "index": 0, "delta": { "content": "answer" }, "finish_reason": "stop" }] },
+        { "id": "text-response", "choices": [], "usage": { "prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5, "cost": 0.00001 } }
+      ]
+    }
+  ]
+}
