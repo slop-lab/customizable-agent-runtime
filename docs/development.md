@@ -18,6 +18,21 @@ The daemon stores its SQLite state in `.car/runtime.sqlite` by default. Set
 `CAR_DATA_DIR` to use a separate data directory for tests or parallel manual
 experiments. Only one daemon writer may open a data directory at a time.
 
+Useful local inspection flows are:
+
+```bash
+just chat
+# in chat: /sessions, /resume ID, /runs, /usage
+
+# after stopping chat
+just start
+# in another terminal
+just usage --json
+```
+
+The standalone usage command intentionally calls the daemon API. It does not
+bypass runtime contracts by querying SQLite tables directly.
+
 ## DIM workflow
 
 CAR uses DIM as development infrastructure, not as part of the runtime kernel.

@@ -37,10 +37,13 @@ cancellable unit of work within or beside a run. A record is immutable history,
 and an artifact stores large or binary content outside a record.
 
 The durable spike implements SQLite-backed sessions, runs, operations, records,
-command receipts and an event outbox, plus a typed development worker for read
-and shell execution. Branching, artifacts, suspension, and module state remain
-planned kernel capabilities. The canonical remote protocol will be WebSocket
-JSON-RPC 2.0; the current small HTTP endpoint is disposable spike code.
+command receipts, an event outbox, context and usage projections, model
+attempts, and provider artifacts. Its typed development worker supports read,
+directory-listing, shell, and Git-status execution. Branching, suspension,
+module state, remaining edit/search operations, large tool-output projection,
+and an isolated worker remain planned kernel capabilities. The canonical remote
+protocol will be WebSocket JSON-RPC 2.0; the current small HTTP endpoint and its
+list/usage inspectors are disposable spike code.
 
 ## Provider boundary
 
@@ -50,3 +53,8 @@ transports through opaque credential handles and are not part of the provider
 interface. No complete coding-agent product is a priority provider backend.
 The fake provider remains the first conformance implementation, followed by a
 direct model API selected for its usefulness in runtime experiments.
+
+Provider-native requests, usage objects, and semantic event chunks remain the
+audit source. Versioned normalized context and usage projections coexist with
+them for cross-provider inspection. Missing cost stays unknown; the core does
+not silently estimate or zero-fill a value the provider did not report.

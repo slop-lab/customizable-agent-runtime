@@ -36,6 +36,14 @@ observed before normalization.
   Provider-generated steps are preserved and resent exactly; CAR remains the
   authoritative history owner.
 
+## Subsequent implementation note
+
+The OpenRouter Chat Completions adapter follows the same trace rule:
+its transport removes SSE framing, every decoded chunk is appended to the
+provider-event artifact, and only then are text and indexed tool-call deltas
+assembled. Raw provider usage is retained alongside a versioned normalized
+usage projection; absent cost remains unknown.
+
 ## Demo defaults
 
 - Sequential tool execution.
