@@ -60,6 +60,11 @@ test("local worker enforces deadline, cancellation, and output limit", async () 
   const controller = new AbortController();
   controller.abort();
   assert.equal((await worker.execute(request({ type: "shell", command: "true" }), controller.signal)).code, "cancelled");
+  const runningController = new AbortController();
+  const running = worker.execute(request({ type: "shell", command: "sleep 1" }), runningController.signal);
+  setTimeout(() => runningController.abort(), 20);
+  const cancelled = await running;
+  assert.equal(cancelled.code, "cancelled"); assert.equal(cancelled.uncertain, true);
   assert.equal((await worker.execute(request({ type: "readFile", path: "hello.txt" }), new AbortController().signal)).code, "output-limit");
   const timedOut = await worker.execute({ ...request({ type: "shell", command: "sleep 1" }),
     deadline: new Date(Date.now() + 30).toISOString() }, new AbortController().signal);
