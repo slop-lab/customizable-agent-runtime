@@ -7,8 +7,12 @@ import {
   ArtifactStore, KernelDatabase, ModelAttemptFailure, ProviderInvocationError, Runtime, RuntimeError, ToolDispatcher,
 } from "@car/core";
 import { LocalDevelopmentWorker } from "./local-worker.js";
+import { EnvironmentCredentialResolver } from "./credentials.js";
+import { GoogleFetchInteractionsTransport, GoogleInteractionsProvider } from "./google-provider.js";
 
 export { LocalDevelopmentWorker } from "./local-worker.js";
+export * from "./credentials.js";
+export * from "./google-provider.js";
 
 export type FakeProviderAction =
   | { readonly type: "turn"; readonly turn: ProviderTurn }
@@ -108,6 +112,20 @@ export interface DefaultRuntimeOptions {
   readonly worker?: ExecutionWorker;
   readonly provider?: ModelProvider;
   readonly driver?: AgentDriver;
+}
+
+export function createProviderFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): ModelProvider {
+  const selected = environment.CAR_PROVIDER ?? "fake";
+  if (selected === "fake") return new FakeProvider();
+  if (selected !== "google-ai-studio") throw new RuntimeError("validation", `Unknown provider: ${selected}`);
+  const model = environment.CAR_GOOGLE_MODEL ?? "gemini-3.7-flash";
+  const endpoint = environment.CAR_GOOGLE_ENDPOINT ?? "https://generativelanguage.googleapis.com/v1beta/interactions";
+  const credentialHandle = "env:TEMPORARY_GEMINI_API_KEY";
+  const credentials = new EnvironmentCredentialResolver(environment);
+  const transport = new GoogleFetchInteractionsTransport(endpoint, credentialHandle, credentials);
+  return new GoogleInteractionsProvider({ model, endpoint, credentialHandle, transport });
 }
 
 export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runtime {

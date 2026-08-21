@@ -1,0 +1,188 @@
+import type {
+  JsonObject, ModelInvocationRequest, ModelProvider, NormalizedContent, ProviderCapabilitiesV1,
+  ProviderProfile, ProviderTurn,
+} from "@car/core";
+import { ProviderInvocationError } from "@car/core";
+import type { CredentialResolver } from "./credentials.js";
+
+export interface GoogleInteractionsTransport {
+  stream(body: JsonObject, signal: AbortSignal): AsyncIterable<unknown>;
+}
+
+export class GoogleFetchInteractionsTransport implements GoogleInteractionsTransport {
+  constructor(
+    private readonly endpoint: string,
+    private readonly credentialHandle: string,
+    private readonly credentials: CredentialResolver,
+    private readonly fetchImplementation: typeof fetch = fetch,
+  ) {}
+
+  async *stream(body: JsonObject, signal: AbortSignal): AsyncIterable<unknown> {
+    const separator = this.endpoint.includes("?") ? "&" : "?";
+    let response: Response;
+    try {
+      response = await this.fetchImplementation(`${this.endpoint}${separator}alt=sse`, {
+        method: "POST", signal,
+        headers: { "content-type": "application/json", "x-goog-api-key": this.credentials.resolve(this.credentialHandle) },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      if (signal.aborted) throw new ProviderInvocationError("provider.cancelled", "Google request cancelled", false);
+      throw new ProviderInvocationError("transport.network", error instanceof Error ? error.message : String(error), true);
+    }
+    if (!response.ok) {
+      const responseText = await response.text();
+      const retryable = response.status === 429 || response.status >= 500;
+      throw new ProviderInvocationError(`google.http.${response.status}`,
+        `Google Interactions request failed (${response.status}): ${safeErrorMessage(responseText)}`, retryable,
+        { status: response.status });
+    }
+    if (!response.body) throw new ProviderInvocationError("transport.empty", "Google response has no stream body", true);
+    yield* parseSseJson(response.body, signal);
+  }
+}
+
+export interface GoogleProviderOptions {
+  readonly model: string;
+  readonly endpoint: string;
+  readonly credentialHandle: string;
+  readonly transport: GoogleInteractionsTransport;
+}
+
+export class GoogleInteractionsProvider implements ModelProvider {
+  readonly id = "google.interactions";
+  readonly profile: ProviderProfile;
+  readonly capabilities: ProviderCapabilitiesV1 = { version: 1, values: {
+    "core.streaming.text": { supported: true },
+    "core.tools.calls": { supported: true, constraints: { parallel: true } },
+    "core.cancellation": { supported: true },
+    "core.provider-native": { supported: true },
+    "google.interactions.stateless": { supported: true },
+  } };
+
+  constructor(private readonly options: GoogleProviderOptions) {
+    this.profile = { id: "google-ai-studio", provider: "google", model: options.model,
+      endpoint: options.endpoint, credentialHandle: options.credentialHandle };
+  }
+
+  async invoke(request: ModelInvocationRequest): Promise<ProviderTurn> {
+    const body = { model: this.options.model, store: false, stream: true,
+      input: projectGoogleInput(request.context.content), tools: request.tools.map((tool) => ({
+        type: "function", name: tool.name, description: tool.description,
+        parameters: tool.inputSchema ?? { type: "object", additionalProperties: true },
+      })) } as const;
+    request.recordRequest(body);
+    const steps = new Map<number, Record<string, unknown>>();
+    let completed: Record<string, unknown> | undefined;
+    for await (const payload of this.options.transport.stream(body, request.signal)) {
+      const event = asObject(payload);
+      const eventType = stringValue(event.event_type) ?? "unknown";
+      request.recordEvent(eventType, payload);
+      applyStreamEvent(steps, event);
+      if (eventType === "interaction.completed") completed = asObject(event.interaction);
+    }
+    const finalSteps = Array.isArray(completed?.steps) ? completed.steps.map(asObject) : [...steps.values()];
+    const content: NormalizedContent[] = [];
+    for (const step of finalSteps) {
+      content.push(...normalizeGoogleStep(step));
+      content.push({ type: "provider-native", provider: "google.interactions", value: step });
+    }
+    return { content, finishReason: stringValue(completed?.status) ?? "completed",
+      ...(asObjectOrUndefined(completed?.usage) ? { usage: asObject(completed!.usage) } : {}),
+      ...(stringValue(completed?.id) ? { providerResponseId: stringValue(completed!.id)! } : {}) };
+  }
+}
+
+export async function* parseSseJson(stream: ReadableStream<Uint8Array>, signal: AbortSignal): AsyncIterable<unknown> {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for await (const bytes of stream) {
+    signal.throwIfAborted();
+    buffer += decoder.decode(bytes, { stream: true }).replaceAll("\r\n", "\n");
+    while (true) {
+      const boundary = buffer.indexOf("\n\n");
+      if (boundary < 0) break;
+      const frame = buffer.slice(0, boundary); buffer = buffer.slice(boundary + 2);
+      const data = frame.split("\n").filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart()).join("\n");
+      if (data && data !== "[DONE]") yield parseJson(data);
+    }
+  }
+  buffer += decoder.decode();
+  const data = buffer.split("\n").filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).trimStart()).join("\n");
+  if (data && data !== "[DONE]") yield parseJson(data);
+}
+
+function projectGoogleInput(content: readonly NormalizedContent[]): unknown[] {
+  const hasNativeGoogleSteps = content.some((value) => value.type === "provider-native" && value.provider === "google.interactions");
+  const input: unknown[] = [];
+  for (const item of content) {
+    if (item.type === "provider-native" && item.provider === "google.interactions") { input.push(item.value); continue; }
+    if (item.type === "text" && item.role === "user") {
+      input.push({ type: "user_input", content: [{ type: "text", text: item.text }] }); continue;
+    }
+    if (item.type === "text" && item.role === "system") {
+      input.push({ type: "user_input", content: [{ type: "text", text: item.text }] }); continue;
+    }
+    if (item.type === "text" && item.role === "assistant" && !hasNativeGoogleSteps) {
+      input.push({ type: "model_output", content: [{ type: "text", text: item.text }] }); continue;
+    }
+    if (item.type === "tool-call" && !hasNativeGoogleSteps) {
+      input.push({ type: "function_call", id: item.callId, name: item.toolName, arguments: item.input }); continue;
+    }
+    if (item.type === "tool-result") input.push({ type: "function_result", call_id: item.callId,
+      is_error: item.isError, result: [{ type: "text", text: typeof item.output === "string" ? item.output : JSON.stringify(item.output) }] });
+  }
+  return input;
+}
+
+function applyStreamEvent(steps: Map<number, Record<string, unknown>>, event: Record<string, unknown>): void {
+  const index = typeof event.index === "number" ? event.index : steps.size;
+  if (event.event_type === "step.start") { steps.set(index, structuredClone(asObject(event.step))); return; }
+  if (event.event_type !== "step.delta") return;
+  const step = steps.get(index) ?? {};
+  const delta = asObject(event.delta);
+  const type = stringValue(delta.type);
+  if (type === "text" && typeof delta.text === "string") {
+    const content = Array.isArray(step.content) ? step.content as Record<string, unknown>[] : [];
+    const last = content.at(-1);
+    if (last?.type === "text") last.text = `${stringValue(last.text) ?? ""}${delta.text}`;
+    else content.push({ type: "text", text: delta.text });
+    step.type ??= "model_output"; step.content = content;
+  } else if (type === "arguments" || type === "arguments_delta") {
+    const partial = stringValue(delta.partial_arguments) ?? stringValue(delta.arguments_delta) ?? "";
+    step.__partialArguments = `${stringValue(step.__partialArguments) ?? ""}${partial}`;
+  }
+  steps.set(index, step);
+}
+
+function normalizeGoogleStep(step: Record<string, unknown>): NormalizedContent[] {
+  if (step.type === "model_output" && Array.isArray(step.content)) return step.content.flatMap((part) => {
+    const value = asObject(part); return value.type === "text" && typeof value.text === "string"
+      ? [{ type: "text" as const, role: "assistant" as const, text: value.text }] : [];
+  });
+  if (step.type === "function_call") {
+    let input = step.arguments;
+    if (input === undefined && typeof step.__partialArguments === "string") input = parseJson(step.__partialArguments);
+    return typeof step.id === "string" && typeof step.name === "string"
+      ? [{ type: "tool-call", callId: step.id, toolName: step.name, input }] : [];
+  }
+  return [];
+}
+
+function parseJson(value: string): unknown {
+  try { return JSON.parse(value) as unknown; }
+  catch (error) { throw new ProviderInvocationError("google.invalid-json", `Invalid Google event JSON: ${error instanceof Error ? error.message : String(error)}`, false); }
+}
+function safeErrorMessage(value: string): string {
+  try { const parsed = asObject(JSON.parse(value)); const error = asObject(parsed.error); return stringValue(error.message) ?? `HTTP error`; }
+  catch { return value.slice(0, 500); }
+}
+function asObject(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+function asObjectOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+}
+function stringValue(value: unknown): string | undefined { return typeof value === "string" ? value : undefined; }
