@@ -79,12 +79,12 @@ test("cancellation during a tool leaves no post-cancel tool result continuation"
   const provider = providerFrom(async () => ({ content: [
     { type: "tool-call", callId: "call", toolName: "effect", input: {} },
   ] }));
-  let toolStarted;
+  let toolStarted; let finishTool;
   const started = new Promise((resolve) => { toolStarted = resolve; });
-  const tool = { description: { name: "effect", description: "effect" }, async execute(_input, context) {
+  const toolCanFinish = new Promise((resolve) => { finishTool = resolve; });
+  const tool = { description: { name: "effect", description: "effect" }, async execute() {
     toolStarted();
-    await new Promise((_resolve, reject) => context.signal.addEventListener("abort",
-      () => reject(context.signal.reason), { once: true }));
+    await toolCanFinish;
     return { output: "must not appear" };
   } };
   const runtime = createTestRuntime(provider, [tool], { system: deterministicSystem() });
@@ -92,6 +92,7 @@ test("cancellation during a tool leaves no post-cancel tool result continuation"
   const execution = await runtime.startRun(session.id, "cancel tool");
   await started;
   execution.cancel();
+  finishTool();
   const run = await execution.completion;
   assert.equal(run.status, "cancelled");
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user", "tool-call"]);

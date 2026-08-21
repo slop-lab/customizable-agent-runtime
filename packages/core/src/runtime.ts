@@ -274,17 +274,23 @@ export class Runtime {
       this.#repository.createOperation(value, this.#event("operation.started", value)); return value;
     });
     this.#publishPending();
+    let operationFinished = false;
     try {
       const result = await this.tools.dispatch(call.toolName, call.input, { sessionId, runId,
         operationId: operation.id, workspace: this.#workspace,
         deadline: new Date(Date.parse(this.#system.clock.now()) + this.#toolTimeoutMs).toISOString(), signal });
+      signal.throwIfAborted();
       await this.#finishTool(operation, "completed", this.#redactor.redact(result));
+      operationFinished = true;
+      signal.throwIfAborted();
       await this.#appendNormalized(sessionId, runId, { type: "tool-result", callId: call.callId,
         output: result.output, isError: result.isError === true });
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      await this.#finishTool(operation, signal.aborted ? "cancelled" : "failed", undefined, message);
+      if (!operationFinished) {
+        await this.#finishTool(operation, signal.aborted ? "cancelled" : "failed", undefined, message);
+      }
       if (signal.aborted) throw signal.reason ?? new RuntimeError("cancelled", `Tool operation cancelled: ${operation.id}`);
       const result = { output: message, isError: true };
       await this.#appendNormalized(sessionId, runId, { type: "tool-result", callId: call.callId,
