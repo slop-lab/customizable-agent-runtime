@@ -1,3 +1,5 @@
+import type { WorkspaceHandle } from "./worker.js";
+
 export type Id = string;
 
 export interface TextContent {
@@ -43,11 +45,15 @@ export interface Provider {
 export interface ToolDescription {
   readonly name: string;
   readonly description: string;
+  readonly validateInput?: (input: unknown) => string | undefined;
 }
 
 export interface ToolContext {
   readonly sessionId: Id;
   readonly runId: Id;
+  readonly operationId: Id;
+  readonly workspace: WorkspaceHandle;
+  readonly deadline: string;
   readonly signal: AbortSignal;
 }
 
@@ -63,7 +69,11 @@ export interface Tool {
 
 export type ToolMiddlewareDecision =
   | { readonly type: "continue" }
-  | { readonly type: "substitute"; readonly result: ToolResult };
+  | { readonly type: "replace"; readonly input: unknown }
+  | { readonly type: "deny"; readonly message: string }
+  | { readonly type: "suspend"; readonly reason: string }
+  | { readonly type: "substitute"; readonly result: ToolResult }
+  | { readonly type: "redirect"; readonly toolName: string; readonly input: unknown };
 
 export interface ToolMiddleware {
   before(
@@ -107,6 +117,8 @@ export interface RuntimeEvent {
     | "run.started"
     | "record.appended"
     | "run.finished"
+    | "operation.started"
+    | "operation.finished"
     | "operation.recovered";
   readonly occurredAt: string;
   readonly data: unknown;

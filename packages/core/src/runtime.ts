@@ -5,8 +5,14 @@ import { RuntimeRepository } from "./persistence.js";
 import { KernelDatabase } from "./storage.js";
 import { defaultRuntimeSystem, type RuntimeSystem } from "./system.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
+import type { WorkspaceHandle } from "./worker.js";
 
-export interface RuntimeOptions { readonly system?: RuntimeSystem; readonly database?: KernelDatabase }
+export interface RuntimeOptions {
+  readonly system?: RuntimeSystem;
+  readonly database?: KernelDatabase;
+  readonly workspace?: WorkspaceHandle;
+  readonly toolTimeoutMs?: number;
+}
 
 export class Runtime {
   readonly #controllers = new Map<string, AbortController>();
@@ -14,6 +20,8 @@ export class Runtime {
   readonly #system: RuntimeSystem;
   readonly #database: KernelDatabase;
   readonly #repository: RuntimeRepository;
+  readonly #workspace: WorkspaceHandle;
+  readonly #toolTimeoutMs: number;
 
   constructor(private readonly provider: Provider, private readonly tools: ToolDispatcher,
     options: RuntimeOptions | RuntimeSystem = {}) {
@@ -21,6 +29,8 @@ export class Runtime {
     this.#system = normalized.system ?? defaultRuntimeSystem;
     this.#database = normalized.database ?? new KernelDatabase(":memory:");
     this.#repository = new RuntimeRepository(this.#database);
+    this.#workspace = normalized.workspace ?? "default" as WorkspaceHandle;
+    this.#toolTimeoutMs = normalized.toolTimeoutMs ?? 30_000;
     this.#repository.recoverAbandoned(this.#system.clock.now(), (operation) =>
       this.#event("operation.recovered", { operationId: operation.id, runId: operation.runId }));
   }
@@ -95,8 +105,38 @@ export class Runtime {
   async #handleContent(sessionId: string, runId: string, content: ModelContent, signal: AbortSignal) {
     if (content.type === "text") { await this.#append(sessionId, runId, "assistant", content); return; }
     await this.#append(sessionId, runId, "tool-call", content);
-    const result = await this.tools.dispatch(content.toolName, content.input, { sessionId, runId, signal });
-    await this.#append(sessionId, runId, "tool-result", { callId: content.callId, ...result });
+    const operation = await this.#database.writer.run(() => {
+      const now = this.#system.clock.now();
+      const value: Operation = { id: this.#system.ids.next(), runId, kind: "tool", status: "running", startedAt: now };
+      this.#repository.createOperation(value, this.#event("operation.started", value));
+      return value;
+    });
+    this.#publishPending();
+    try {
+      const result = await this.tools.dispatch(content.toolName, content.input, {
+        sessionId, runId, operationId: operation.id, workspace: this.#workspace,
+        deadline: new Date(Date.parse(this.#system.clock.now()) + this.#toolTimeoutMs).toISOString(), signal,
+      });
+      await this.#finishTool(operation, "completed", result);
+      await this.#append(sessionId, runId, "tool-result", { callId: content.callId, ...result });
+    } catch (error) {
+      const cancelled = signal.aborted;
+      const message = error instanceof Error ? error.message : String(error);
+      await this.#finishTool(operation, cancelled ? "cancelled" : "failed", undefined, message);
+      throw error;
+    }
+  }
+
+  async #finishTool(operation: Operation, status: "completed" | "failed" | "cancelled",
+    result?: unknown, error?: string): Promise<void> {
+    await this.#database.writer.run(() => {
+      const now = this.#system.clock.now();
+      const projected = { ...operation, status, endedAt: now,
+        ...(result === undefined ? {} : { result }), ...(error === undefined ? {} : { error }) };
+      this.#repository.finishOperation(operation.id, status, now,
+        this.#event("operation.finished", projected), result, error);
+    });
+    this.#publishPending();
   }
 
   async #append(sessionId: string, runId: string, kind: RecordKind, data: unknown): Promise<void> {

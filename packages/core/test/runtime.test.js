@@ -40,3 +40,44 @@ test("provider failure is recorded deterministically", async () => {
   assert.equal(run.error, "provider failed");
   assert.equal(runtime.getRecords(session.id).at(-1).kind, "error");
 });
+
+test("tool dispatch creates a terminal operation", async () => {
+  const provider = {
+    id: "fake",
+    capabilities: { streaming: true, toolCalls: true, parallelToolCalls: false, cancellation: true },
+    async *stream() { yield { content: { type: "tool-call", callId: "call", toolName: "effect", input: "value" } }; },
+  };
+  const tool = { description: { name: "effect", description: "effect" }, async execute(input) { return { output: String(input) }; } };
+  const runtime = new Runtime(provider, new ToolDispatcher([tool]), deterministicSystem());
+  const session = await runtime.createSession("create-session");
+  const run = await runtime.run(session.id, "hello");
+  assert.equal(run.status, "completed");
+  assert.deepEqual(runtime.getOperations(run.id).map(({ kind, status }) => ({ kind, status })), [
+    { kind: "run", status: "completed" }, { kind: "tool", status: "completed" },
+  ]);
+  assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user", "tool-call", "tool-result"]);
+});
+
+test("cancellation leaves no post-cancel assistant continuation", async () => {
+  const provider = {
+    id: "fake",
+    capabilities: { streaming: true, toolCalls: false, parallelToolCalls: false, cancellation: true },
+    async *stream(request) {
+      await new Promise((resolve, reject) => {
+        request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true });
+      });
+      yield { content: { type: "text", text: "must not appear" } };
+    },
+  };
+  const runtime = new Runtime(provider, new ToolDispatcher([]), deterministicSystem());
+  const session = await runtime.createSession("create-session");
+  let runId;
+  runtime.subscribe((event) => { if (event.type === "run.started") runId = event.data.id; });
+  const pending = runtime.run(session.id, "cancel me");
+  while (!runId) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(runtime.cancelRun(runId), true);
+  const run = await pending;
+  assert.equal(run.status, "cancelled");
+  assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user"]);
+  assert.deepEqual(runtime.getOperations(run.id).map((operation) => operation.status), ["cancelled"]);
+});

@@ -58,6 +58,23 @@ export class RuntimeRepository {
       .all(runId) as Row[]).map(operationFromRow);
   }
 
+  createOperation(operation: Operation, event: RuntimeEvent): void {
+    this.database.transaction(() => {
+      this.database.db.prepare("INSERT INTO operations(id, run_id, kind, status, started_at) VALUES (?, ?, ?, ?, ?)")
+        .run(operation.id, operation.runId, operation.kind, operation.status, operation.startedAt ?? null);
+      this.appendEvent(event);
+    });
+  }
+
+  finishOperation(id: string, status: OperationStatus, now: string, event: RuntimeEvent,
+    result?: unknown, error?: string): Operation {
+    return this.database.transaction(() => {
+      const operation = this.transitionOperation(id, status, now, result, error);
+      this.appendEvent(event);
+      return operation;
+    });
+  }
+
   appendRecord(record: RecordEntry, event: RuntimeEvent): void {
     this.database.transaction(() => { this.insertRecord(record); this.appendEvent(event); });
   }
