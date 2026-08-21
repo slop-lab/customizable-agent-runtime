@@ -1,0 +1,20 @@
+{
+  "name": "@car/defaults",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "types": "./src/index.ts",
+    "default": "./dist/index.js"
+  },
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -b tsconfig.build.json",
+    "check": "tsc --noEmit",
+    "clean": "tsc -b tsconfig.build.json --clean",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "@car/core": "workspace:*"
+  }
+}

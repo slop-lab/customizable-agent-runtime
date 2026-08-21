@@ -1,0 +1,7 @@
+schemaVersion: 1
+repositories:
+  car:
+    url: https://github.com/slop-lab/customizable-agent-runtime.git
+    root: true
+    protect:
+      - main

@@ -1,0 +1,19 @@
+#!/usr/bin/env sh
+set -eu
+
+task="${1:?task is required}"
+shift
+
+case "$task" in
+  bash) set -- bash "$@" ;;
+  codex) set -- codex --dangerously-bypass-approvals-and-sandbox "$@" ;;
+  check|test|build) set -- pnpm "$task" "$@" ;;
+  *)
+    echo "unknown CAR DIM task: $task" >&2
+    exit 2
+    ;;
+esac
+
+exec docker compose --project-name "dim-${DIM_WORKSPACE_NAME}" \
+  --file .dim/docker-compose.yml exec \
+  --user "$(id -u):$(id -g)" --env HOME=/home/dim-agent agent "$@"

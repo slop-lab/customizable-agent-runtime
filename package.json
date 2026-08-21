@@ -1,0 +1,23 @@
+{
+  "name": "@car/workspace",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.13.1",
+  "engines": {
+    "node": "^24.0.0 || ^26.0.0",
+    "pnpm": ">=10.0.0"
+  },
+  "scripts": {
+    "build": "pnpm --recursive run build",
+    "check": "pnpm --recursive run check",
+    "clean": "pnpm --recursive run clean",
+    "dev": "pnpm --filter @car/daemon run dev",
+    "start": "pnpm --filter @car/daemon run start",
+    "test": "pnpm --recursive run test"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2"
+  }
+}
