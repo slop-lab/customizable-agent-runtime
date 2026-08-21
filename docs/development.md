@@ -22,12 +22,23 @@ and Git promotion boundary. CAR owns agent semantics and runtime behavior.
 All runtime interfaces must also work in a normal local checkout, container,
 VM, or remote workspace without DIM environment variables or controller APIs.
 
-Register the checked-out repository as the Project root (adjust URL and ref):
+Register the official GitHub repository as the Project root:
 
 ```bash
-dim project create car --url /path/to/customizable-agent-runtime --ref main
+dim project create car \
+  --url https://github.com/slop-lab/customizable-agent-runtime.git \
+  --ref main --apply-repos
 dim workspace create car car-dev --cpus 4 --memory 8g --pids-limit 1024
 dim workspace run car-dev codex
+```
+
+Workspace clones use DIM-managed Gitea as `origin`; do not replace it with the
+GitHub URL. From the DIM host, import official changes under the managed
+`upstream/*` namespace and publish reviewed refs back to GitHub explicitly:
+
+```bash
+dim repo fetch car car
+dim repo push car car refs/heads/main:refs/heads/main
 ```
 
 Available Project tasks are `codex`, `bash`, `check`, `test`, and `build`.

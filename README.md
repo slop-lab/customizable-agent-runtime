@@ -52,14 +52,23 @@ durable history or production readiness.
 
 ## Developing with DIM
 
-The repository follows DIM's single-repository Project contract. After
-registering this repository as a DIM Project root, create a bounded workspace:
+The repository follows DIM's single-repository Project contract. Register the
+official GitHub repository as the DIM Project's external source, then create a
+bounded workspace:
 
 ```bash
+dim project create car \
+  --url https://github.com/slop-lab/customizable-agent-runtime.git \
+  --ref main --apply-repos
 dim workspace create car car-dev --cpus 4 --memory 8g --pids-limit 1024
 dim workspace run car-dev codex
 dim workspace run car-dev check
 ```
+
+Inside a workspace, `origin` is the Project-scoped DIM Gitea repository. The
+Project's recorded external source remains the official GitHub repository;
+host-side `dim repo fetch` and `dim repo push` synchronize explicitly between
+the two boundaries.
 
 `.dim/setup.sh` starts an unprivileged development container with a private
 rootless Docker daemon. The agent receives neither the host Docker socket nor
