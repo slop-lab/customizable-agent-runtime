@@ -40,7 +40,7 @@ async function availablePort() {
 async function startDaemon(dataDirectory, port) {
   const child = spawn(process.execPath, ["--enable-source-maps", "dist/main.js"], {
     cwd: new URL("..", import.meta.url),
-    env: { ...process.env, CAR_DATA_DIR: dataDirectory, CAR_PORT: String(port) },
+    env: { ...process.env, CAR_PROVIDER: "fake", CAR_DATA_DIR: dataDirectory, CAR_PORT: String(port) },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";

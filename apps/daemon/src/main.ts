@@ -1,12 +1,18 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { createDefaultRuntime } from "@car/defaults";
+import { fileURLToPath } from "node:url";
+import { createDefaultRuntime, createProviderFromEnvironment } from "@car/defaults";
 
-const dataDirectory = process.env.CAR_DATA_DIR ?? join(process.cwd(), ".car");
+const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const environmentFile = join(repositoryRoot, ".env");
+if (existsSync(environmentFile)) process.loadEnvFile(environmentFile);
+const dataDirectory = process.env.CAR_DATA_DIR ?? join(repositoryRoot, ".car");
 mkdirSync(dataDirectory, { recursive: true });
-const runtime = createDefaultRuntime({ databasePath: join(dataDirectory, "runtime.sqlite") });
+const runtime = createDefaultRuntime({ databasePath: join(dataDirectory, "runtime.sqlite"),
+  artifactRoot: join(dataDirectory, "artifacts"), workspaceRoot: repositoryRoot,
+  provider: createProviderFromEnvironment() });
 const host = process.env.CAR_HOST ?? "127.0.0.1";
 const port = Number.parseInt(process.env.CAR_PORT ?? "4317", 10);
 
@@ -54,6 +60,39 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   const cancelMatch = /^\/v1\/runs\/([^/]+)\/cancel$/.exec(url.pathname);
   if (request.method === "POST" && cancelMatch?.[1]) {
     send(response, runtime.cancelRun(cancelMatch[1]) ? 202 : 404, {});
+    return;
+  }
+
+  const runMatch = /^\/v1\/runs\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "GET" && runMatch?.[1]) {
+    const run = runtime.getRun(runMatch[1]);
+    send(response, run ? 200 : 404, run ?? { error: "Run not found" });
+    return;
+  }
+
+  const operationsMatch = /^\/v1\/runs\/([^/]+)\/operations$/.exec(url.pathname);
+  if (request.method === "GET" && operationsMatch?.[1]) {
+    send(response, 200, runtime.getOperations(operationsMatch[1]));
+    return;
+  }
+
+  const attemptsMatch = /^\/v1\/runs\/([^/]+)\/attempts$/.exec(url.pathname);
+  if (request.method === "GET" && attemptsMatch?.[1]) {
+    send(response, 200, runtime.getModelAttempts(attemptsMatch[1]));
+    return;
+  }
+
+  const contextMatch = /^\/v1\/context-projections\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "GET" && contextMatch?.[1]) {
+    const context = runtime.getContextProjection(contextMatch[1]);
+    send(response, context ? 200 : 404, context ?? { error: "Context projection not found" });
+    return;
+  }
+
+  const artifactMatch = /^\/v1\/artifacts\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "GET" && artifactMatch?.[1]) {
+    const artifact = runtime.getArtifact(artifactMatch[1]);
+    send(response, artifact ? 200 : 404, artifact ?? { error: "Artifact not found" });
     return;
   }
 
