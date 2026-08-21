@@ -41,9 +41,15 @@ export class GoogleFetchInteractionsTransport implements GoogleInteractionsTrans
         { status: response.status });
     }
     if (!response.body) throw new ProviderInvocationError("transport.empty", "Google response has no stream body", true);
-    yield* parseSseJson(response.body, signal, { invalidJson: (_value, error) =>
-      new ProviderInvocationError("google.invalid-json",
-        `Invalid Google event JSON: ${error instanceof Error ? error.message : String(error)}`, false) });
+    try {
+      yield* parseSseJson(response.body, signal, { invalidJson: (_value, error) =>
+        new ProviderInvocationError("google.invalid-json",
+          `Invalid Google event JSON: ${error instanceof Error ? error.message : String(error)}`, false) });
+    } catch (error) {
+      if (error instanceof ProviderInvocationError) throw error;
+      if (signal.aborted) throw new ProviderInvocationError("provider.cancelled", "Google request cancelled", false);
+      throw new ProviderInvocationError("transport.network", error instanceof Error ? error.message : String(error), true);
+    }
   }
 }
 
@@ -84,8 +90,10 @@ export class GoogleInteractionsProvider implements ModelProvider {
       const eventType = stringValue(event.event_type) ?? "unknown";
       request.recordEvent(eventType, payload);
       applyStreamEvent(steps, event);
-      if (eventType === "interaction.completed") completed = asObject(event.interaction);
+      if (eventType === "interaction.completed") completed = asObjectOrUndefined(event.interaction);
     }
+    if (!completed) throw new ProviderInvocationError("google.incomplete-stream",
+      "Google stream ended without an interaction.completed event", true);
     const finalSteps = (Array.isArray(completed?.steps) ? completed.steps.map(asObject) : [...steps.values()])
       .map(finalizeStreamStep);
     const content: NormalizedContent[] = [];

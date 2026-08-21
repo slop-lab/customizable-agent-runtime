@@ -89,6 +89,19 @@ test("Google adapter reconstructs thought signatures for stateless continuation"
     value: { type: "thought", signature: "signed" } }]);
 });
 
+test("Google adapter makes a stream without a terminal interaction retryable", async () => {
+  const transport = { async *stream() {
+    yield { event_type: "step.delta", index: 0, delta: { type: "text", text: "partial" } };
+    yield { event_type: "interaction.completed" };
+  } };
+  const provider = new GoogleInteractionsProvider({ model: "gemini-test", endpoint: "https://example.test",
+    credentialHandle: "env:KEY", transport });
+  const trace = invocation();
+  await assert.rejects(() => provider.invoke(trace.value),
+    (error) => error.code === "google.incomplete-stream" && error.retryable === true);
+  assert.equal(trace.events.length, 2);
+});
+
 test("Google stateless projection links function results to their function names", async () => {
   let body;
   const transport = { async *stream(value) {
@@ -126,4 +139,10 @@ test("Google transport resolves credentials internally and classifies retryable 
     async () => new Response(JSON.stringify({ error: { message: "limited" } }), { status: 429 }));
   await assert.rejects(async () => { for await (const _value of limited.stream({}, new AbortController().signal)) {} },
     (error) => error.retryable === false && error.code === "google.http.429");
+
+  const broken = new GoogleFetchInteractionsTransport("https://example.test", "env:KEY", credentials,
+    async () => new Response(new ReadableStream({ start(controller) { controller.error(new Error("stream reset")); } }),
+      { status: 200 }));
+  await assert.rejects(async () => { for await (const _value of broken.stream({}, new AbortController().signal)) {} },
+    (error) => error.retryable === true && error.code === "transport.network");
 });
