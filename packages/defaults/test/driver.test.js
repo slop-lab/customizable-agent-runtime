@@ -3,6 +3,13 @@ import test from "node:test";
 import { FakeWorker } from "@car/core";
 import { createDefaultRuntime, DemoAgentDriver, FakeProvider } from "../dist/index.js";
 
+test("default runtime exposes the complete development workspace tool set", () => {
+  const runtime = createDefaultRuntime({ worker: new FakeWorker(() => ({ ok: true, output: "unused" })) });
+  assert.deepEqual(runtime.capabilities().tools.map((tool) => tool.name),
+    ["read", "list", "search", "write", "apply_patch", "shell", "git_status"]);
+  runtime.close();
+});
+
 test("demo driver completes a model-tool-model loop with durable attempts", async () => {
   const contexts = [];
   let invocation = 0;

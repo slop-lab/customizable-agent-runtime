@@ -51,7 +51,8 @@ The current implementation is a durable kernel spike. It persists sessions,
 runs, operations, model attempts, normalized context projections, provider
 request/event artifacts, records, command receipts, and an event outbox in
 SQLite. It recovers abandoned work after restart and routes default read,
-directory-listing, shell, and Git-status tools through a typed workspace worker.
+directory-listing, regex-search, full-file write, unified-diff patch, shell, and
+Git-status tools through a typed workspace worker.
 A fake provider supports deterministic tests. OpenRouter Chat Completions and
 Google Interactions adapters support real model-tool-model loops and preserve
 each decoded SSE semantic event. It does not claim production readiness.

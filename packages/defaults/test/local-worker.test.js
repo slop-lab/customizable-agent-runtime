@@ -23,22 +23,33 @@ workerConformance("local development worker", () => {
   return { worker, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 });
 
-workerConformance("fake worker", () => ({ worker: new FakeWorker((value) => {
-  if (value.workspace !== "workspace") return { ok: false, code: "invalid-scope", message: "scope" };
-  if (value.type === "readFile") return { ok: true, output: "hello worker" };
-  if (value.type === "list") return { ok: true, output: "hello.txt" };
-  if (value.type === "gitStatus") return { ok: true, output: "?? hello.txt" };
-  return { ok: true, output: "shell" };
-}) }));
+workerConformance("fake worker", () => {
+  const files = new Map([["hello.txt", "hello worker"]]);
+  return { worker: new FakeWorker((value) => {
+    if (value.workspace !== "workspace") return { ok: false, code: "invalid-scope", message: "scope" };
+    if (value.type === "readFile") return { ok: true, output: files.get(value.path) ?? "" };
+    if (value.type === "list") return { ok: true, output: [...files.keys()].join("\n") };
+    if (value.type === "search") return { ok: true,
+      output: value.query === "hello" ? "hello.txt:1:hello worker" : "" };
+    if (value.type === "writeFile") { files.set(value.path, value.content); return { ok: true, output: "written" }; }
+    if (value.type === "applyPatch") { files.set("patched.txt", "patched worker\n"); return { ok: true, output: "patched" }; }
+    if (value.type === "gitStatus") return { ok: true, output: "?? hello.txt" };
+    return { ok: true, output: "shell" };
+  }) };
+});
 
 test("local worker rejects traversal and symlink escape", async () => {
   const { root, worker } = fixture();
   const outside = mkdtempSync(join(tmpdir(), "car-outside-"));
   writeFileSync(join(outside, "secret"), "no");
   symlinkSync(join(outside, "secret"), join(root, "escape"));
+  symlinkSync(outside, join(root, "escape-directory"));
   const signal = new AbortController().signal;
   assert.equal((await worker.execute(request({ type: "readFile", path: "../secret" }), signal)).code, "invalid-scope");
   assert.equal((await worker.execute(request({ type: "readFile", path: "escape" }), signal)).code, "invalid-scope");
+  assert.equal((await worker.execute(request({ type: "search", query: "no", path: "escape-directory" }), signal)).code, "invalid-scope");
+  assert.equal((await worker.execute(request({ type: "writeFile", path: "escape-directory/new", content: "no" }), signal)).code,
+    "invalid-scope");
   rmSync(root, { recursive: true, force: true });
   rmSync(outside, { recursive: true, force: true });
 });

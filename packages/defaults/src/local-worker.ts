@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
-import { readFile, readdir, realpath } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ExecutionWorker, WorkerRequest, WorkerResponse, WorkspaceHandle } from "@car/core";
 
@@ -44,6 +45,42 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
         if (Buffer.byteLength(output) > this.#maxOutputBytes) return failure("output-limit", "Directory listing exceeds worker output limit");
         return { ok: true, output, metadata: { entries: entries.length } };
       }
+      if (request.type === "search") {
+        const cwd = await this.#resolve(".", request.cwd);
+        const path = await this.#resolve(request.path ?? ".", request.cwd);
+        try {
+          const result = await execFileAsync("rg", ["--line-number", "--with-filename", "--color=never", "--no-heading",
+            "--", request.query, relative(cwd, path) || "."], {
+            cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxOutputBytes,
+          });
+          const output = `${result.stdout}${result.stderr}`;
+          return { ok: true, output, metadata: { matches: lineCount(result.stdout) } };
+        } catch (error) {
+          const value = error as { code?: string | number };
+          if (value.code === 1) return { ok: true, output: "", metadata: { matches: 0 } };
+          throw error;
+        }
+      }
+      if (request.type === "writeFile") {
+        const root = await this.#root;
+        const path = await this.#resolveWritable(request.path, request.cwd);
+        await mkdir(dirname(path), { recursive: true });
+        await writeFile(path, request.content, { encoding: "utf8", signal });
+        return { ok: true, output: `Wrote ${relative(root, path) || "."}`,
+          metadata: { bytes: Buffer.byteLength(request.content) } };
+      }
+      if (request.type === "applyPatch") {
+        const cwd = await this.#resolve(".", request.cwd);
+        const temporary = await mkdtemp(join(tmpdir(), "car-worker-patch-"));
+        const patchPath = join(temporary, "change.diff");
+        try {
+          await writeFile(patchPath, request.patch, { encoding: "utf8", signal });
+          const result = await execFileAsync("git", ["apply", "--whitespace=nowarn", patchPath], {
+            cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxOutputBytes,
+          });
+          return { ok: true, output: `${result.stdout}${result.stderr}` || "Applied patch" };
+        } finally { await rm(temporary, { recursive: true, force: true }); }
+      }
       if (request.type === "gitStatus") {
         const cwd = await this.#resolve(".", request.cwd);
         const result = await execFileAsync("git", ["status", "--short", "--branch"], {
@@ -51,19 +88,19 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
         });
         return { ok: true, output: `${result.stdout}${result.stderr}` };
       }
-      if (request.type !== "shell") return failure("worker-failed", `Unsupported development worker request: ${request.type}`);
       const cwd = await this.#resolve(".", request.cwd);
       const result = await execFileAsync("/bin/sh", ["-lc", request.command], {
         cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxOutputBytes,
       });
       return { ok: true, output: `${result.stdout}${result.stderr}` };
     } catch (error) {
-      if (signal.aborted) return failure("cancelled", "Operation was cancelled");
+      const uncertain = isSideEffecting(request);
+      if (signal.aborted) return failure("cancelled", "Operation was cancelled", uncertain);
       const value = error as { code?: string | number; killed?: boolean; message?: string; stdout?: string; stderr?: string };
-      if (value.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return failure("output-limit", "Shell output exceeds worker limit", true);
+      if (value.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return failure("output-limit", "Worker output exceeds limit", uncertain);
       if (value.killed) return failure("timeout", "Shell operation timed out", true);
       if (value.code === "CAR_INVALID_SCOPE") return failure("invalid-scope", value.message ?? "Path is outside workspace");
-      return failure("worker-failed", value.message ?? String(error), request.type === "shell");
+      return failure("worker-failed", value.message ?? String(error), uncertain);
     }
   }
 
@@ -75,6 +112,28 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
     const candidate = await realpath(unresolved);
     assertWithinRoot(root, candidate);
     return candidate;
+  }
+
+  async #resolveWritable(path: string, cwd = "."): Promise<string> {
+    const root = await this.#root;
+    if (isAbsolute(path) || isAbsolute(cwd)) throw scopeError("Absolute paths are not allowed");
+    const unresolved = resolve(root, cwd, path);
+    assertWithinRoot(root, unresolved);
+    let ancestor = unresolved;
+    while (true) {
+      try {
+        const resolvedAncestor = await realpath(ancestor);
+        assertWithinRoot(root, resolvedAncestor);
+        const candidate = resolve(resolvedAncestor, relative(ancestor, unresolved));
+        assertWithinRoot(root, candidate);
+        return candidate;
+      } catch (error) {
+        if ((error as { code?: string }).code !== "ENOENT") throw error;
+        const parent = dirname(ancestor);
+        if (parent === ancestor) throw error;
+        ancestor = parent;
+      }
+    }
   }
 }
 
@@ -91,4 +150,10 @@ function failure(code: Extract<WorkerResponse, { ok: false }>["code"], message: 
 }
 function scopeError(message: string): Error & { code: string } {
   return Object.assign(new Error(message), { code: "CAR_INVALID_SCOPE" });
+}
+function lineCount(value: string): number {
+  return value.length === 0 ? 0 : value.split("\n").length - (value.endsWith("\n") ? 1 : 0);
+}
+function isSideEffecting(request: WorkerRequest): boolean {
+  return request.type === "writeFile" || request.type === "applyPatch" || request.type === "shell";
 }

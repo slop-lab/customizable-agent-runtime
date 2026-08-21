@@ -186,6 +186,38 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
         workspace: context.workspace, deadline: context.deadline, path: value.path ?? "." }, context.signal));
     },
   };
+  const search: Tool = {
+    description: { name: "search", description: "Search workspace text with a regular expression through the workspace worker.",
+      inputSchema: { type: "object", properties: { query: { type: "string" }, path: { type: "string" } }, required: ["query"] },
+      validateInput: (input) => isSearchInput(input) ? undefined : "Expected an object with a non-empty query and optional string path." },
+    async execute(input, context) {
+      const value = input as { query: string; path?: string };
+      return toolResult(await worker.execute({ type: "search", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline, query: value.query,
+        ...(value.path === undefined ? {} : { path: value.path }) }, context.signal));
+    },
+  };
+  const write: Tool = {
+    description: { name: "write", description: "Replace a UTF-8 file through the workspace worker, creating parent directories when needed.",
+      inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } },
+        required: ["path", "content"] },
+      validateInput: (input) => isWriteInput(input) ? undefined : "Expected an object with string path and content." },
+    async execute(input, context) {
+      const value = input as { path: string; content: string };
+      return toolResult(await worker.execute({ type: "writeFile", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline, path: value.path, content: value.content }, context.signal));
+    },
+  };
+  const applyPatch: Tool = {
+    description: { name: "apply_patch", description: "Apply a standard unified diff relative to the workspace root.",
+      inputSchema: { type: "object", properties: { patch: { type: "string" } }, required: ["patch"] },
+      validateInput: (input) => isPatchInput(input) ? undefined : "Expected an object with a non-empty unified-diff patch." },
+    async execute(input, context) {
+      const value = input as { patch: string };
+      return toolResult(await worker.execute({ type: "applyPatch", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline, patch: value.patch }, context.signal));
+    },
+  };
   const gitStatus: Tool = {
     description: { name: "git_status", description: "Show concise Git workspace status.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
@@ -195,7 +227,7 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
         workspace: context.workspace, deadline: context.deadline }, context.signal));
     },
   };
-  return [read, list, shell, gitStatus];
+  return [read, list, search, write, applyPatch, shell, gitStatus];
 }
 
 function toolResult(response: WorkerResponse) {
@@ -213,6 +245,20 @@ function isCommandInput(input: unknown): input is { command: string; cwd?: strin
 function isOptionalPathInput(input: unknown): input is { path?: string } {
   return typeof input === "object" && input !== null && (!("path" in input) ||
     (input as { path?: unknown }).path === undefined || typeof (input as { path?: unknown }).path === "string");
+}
+function isSearchInput(input: unknown): input is { query: string; path?: string } {
+  if (typeof input !== "object" || input === null || !("query" in input) ||
+    typeof (input as { query?: unknown }).query !== "string" || (input as { query: string }).query.length === 0) return false;
+  return !("path" in input) || (input as { path?: unknown }).path === undefined ||
+    typeof (input as { path?: unknown }).path === "string";
+}
+function isWriteInput(input: unknown): input is { path: string; content: string } {
+  return typeof input === "object" && input !== null && "path" in input && "content" in input &&
+    typeof (input as { path?: unknown }).path === "string" && typeof (input as { content?: unknown }).content === "string";
+}
+function isPatchInput(input: unknown): input is { patch: string } {
+  return typeof input === "object" && input !== null && "patch" in input &&
+    typeof (input as { patch?: unknown }).patch === "string" && (input as { patch: string }).patch.length > 0;
 }
 function isEmptyObject(input: unknown): input is Record<string, never> {
   return typeof input === "object" && input !== null && !Array.isArray(input) && Object.keys(input).length === 0;
