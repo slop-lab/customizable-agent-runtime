@@ -65,12 +65,10 @@ test("cancellation leaves no post-cancel assistant continuation", async () => {
   });
   const runtime = createTestRuntime(provider, [], { system: deterministicSystem() });
   const session = await runtime.createSession("create-session");
-  let runId;
-  runtime.subscribe((event) => { if (event.type === "run.started") runId = event.data.id; });
-  const pending = runtime.run(session.id, "cancel me");
-  while (!runId) await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(runtime.cancelRun(runId), true);
-  const run = await pending;
+  const execution = await runtime.startRun(session.id, "cancel me");
+  assert.equal(execution.run.status, "running");
+  assert.equal(execution.cancel(), true);
+  const run = await execution.completion;
   assert.equal(run.status, "cancelled");
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user"]);
   assert.deepEqual(runtime.getModelAttempts(run.id).map((attempt) => attempt.status), ["cancelled"]);

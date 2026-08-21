@@ -5,10 +5,23 @@ export async function runAgentChat({ runtime, terminal, output, dataDirectory, i
     if (!session) throw new Error(`Unknown session: ${initialSessionId}`);
   } else session = await runtime.createSession();
   const lines = [];
+  let activeExecution; let cancellationRequested = false;
+  const onInterrupt = () => {
+    if (activeExecution) {
+      if (!cancellationRequested) {
+        cancellationRequested = true;
+        output.write(`\n[cancelling run ${activeExecution.run.id}]\n`);
+        activeExecution.cancel();
+      } else output.write("\n[cancellation already requested; waiting for durable terminal state]\n");
+      return;
+    }
+    output.write("\n"); terminal.close();
+  };
+  terminal.on?.("SIGINT", onInterrupt);
   output.write(`CAR interactive agent\nsession: ${session.id}\ndata: ${dataDirectory}\n` +
     "Compose one or more lines, then type /send. Type /help for commands.\n\n");
   terminal.setPrompt("you> "); prompt(terminal);
-  for await (const line of terminal) {
+  try { for await (const line of terminal) {
     const command = line.trim();
     if (command === "/exit" || command === "/quit") break;
     if (command === "/help") {
@@ -63,7 +76,10 @@ export async function runAgentChat({ runtime, terminal, output, dataDirectory, i
     const input = lines.join("\n"); output.write(`[sending ${summary(lines)}]\n`);
     lines.length = 0; terminal.setPrompt("you> ");
     const before = runtime.getRecords(session.id).length;
-    const run = await runtime.run(session.id, input);
+    activeExecution = await runtime.startRun(session.id, input); cancellationRequested = false;
+    let run;
+    try { run = await activeExecution.completion; }
+    finally { activeExecution = undefined; cancellationRequested = false; }
     const records = runtime.getRecords(session.id).slice(before + 1);
     for (const record of records) {
       const data = record.data ?? {};
@@ -72,8 +88,11 @@ export async function runAgentChat({ runtime, terminal, output, dataDirectory, i
       else if (record.kind === "assistant") output.write(`agent> ${data.text}\n`);
       else if (record.kind === "error") output.write(`[run error] ${data.message}\n`);
     }
-    output.write(`[run ${run.status}: ${run.id}]\n\n`); prompt(terminal);
-  }
+    const attempts = runtime.getModelAttempts(run.id);
+    const retries = attempts.filter((attempt) => attempt.retryOfAttemptId !== undefined).length;
+    output.write(`[run ${run.status}: ${run.id}; model requests=${attempts.length}; retries=${retries}]\n\n`);
+    prompt(terminal);
+  } } finally { terminal.off?.("SIGINT", onInterrupt); }
 }
 
 function printSessions(output, sessions, selectedId) {

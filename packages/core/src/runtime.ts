@@ -30,6 +30,12 @@ export interface RuntimeOptions {
   readonly redactor?: TraceRedactor;
 }
 
+export interface RunExecution {
+  readonly run: Run;
+  readonly completion: Promise<Run>;
+  cancel(): boolean;
+}
+
 export class Runtime {
   readonly #controllers = new Map<string, AbortController>();
   readonly #listeners = new Set<(event: RuntimeEvent) => void>();
@@ -125,10 +131,20 @@ export class Runtime {
   }
 
   async run(sessionId: string, input: string): Promise<Run> {
+    return (await this.startRun(sessionId, input)).completion;
+  }
+
+  async startRun(sessionId: string, input: string): Promise<RunExecution> {
     if (!this.getSession(sessionId)) throw new RuntimeError("not-found", `Unknown session: ${sessionId}`);
     const controller = new AbortController();
     const started = await this.#startRun(sessionId, input);
     this.#controllers.set(started.run.id, controller); this.#publishPending();
+    const completion = this.#executeRun(sessionId, started, controller);
+    return { run: started.run, completion, cancel: () => this.cancelRun(started.run.id) };
+  }
+
+  async #executeRun(sessionId: string, started: { run: Run; operation: Operation },
+    controller: AbortController): Promise<Run> {
     try {
       await this.driver.run({
         sessionId, runId: started.run.id, signal: controller.signal,
@@ -193,6 +209,7 @@ export class Runtime {
     let requestRecorded = false;
     let sequence = 0;
     try {
+      signal.throwIfAborted();
       const turn = await this.provider.invoke({ attemptId, context, tools: this.tools.describe(), signal,
         recordRequest: (payload) => {
           if (requestRecorded) throw new Error("Provider request was recorded more than once");
