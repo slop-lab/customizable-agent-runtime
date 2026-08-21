@@ -3,6 +3,8 @@ import { assertOperationTransition } from "./domain.js";
 import { RuntimeError } from "./errors.js";
 import type { RecordEntry, RecordKind, Run, RuntimeEvent, Session } from "./contracts.js";
 import type { KernelDatabase } from "./storage.js";
+import type { ArtifactMetadata } from "./artifacts.js";
+import type { ContextProjection, ModelAttempt, ModelAttemptStatus } from "./agent-contracts.js";
 
 type Row = Readonly<Record<string, unknown>>;
 export interface PendingEvent extends RuntimeEvent { readonly sequence: number }
@@ -135,6 +137,69 @@ export class RuntimeRepository {
     this.database.db.prepare("UPDATE outbox SET published_at = ? WHERE sequence = ? AND published_at IS NULL").run(now, sequence);
   }
 
+  saveArtifact(artifact: ArtifactMetadata): void {
+    this.database.db.prepare(`INSERT INTO artifacts(
+      id, kind, media_type, relative_path, status, byte_length, sha256, created_at, finalized_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET status=excluded.status, byte_length=excluded.byte_length,
+      sha256=excluded.sha256, finalized_at=excluded.finalized_at`)
+      .run(artifact.id, artifact.kind, artifact.mediaType, artifact.relativePath, artifact.status,
+        artifact.byteLength, artifact.sha256 ?? null, artifact.createdAt, artifact.finalizedAt ?? null);
+  }
+
+  getArtifact(id: string): ArtifactMetadata | undefined {
+    const row = this.database.db.prepare("SELECT * FROM artifacts WHERE id = ?").get(id) as Row | undefined;
+    return row ? artifactFromRow(row) : undefined;
+  }
+
+  saveContextProjection(value: ContextProjection): void {
+    this.database.db.prepare(`INSERT INTO context_projections(
+      id, run_id, projector_id, projector_version, included_record_ids_json,
+      excluded_records_json, content_json, request_hash, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(value.id, value.runId, value.projectorId, value.projectorVersion,
+        JSON.stringify(value.includedRecordIds), JSON.stringify(value.excludedRecords), JSON.stringify(value.content),
+        value.requestHash ?? null, value.createdAt);
+  }
+
+  getContextProjection(id: string): ContextProjection | undefined {
+    const row = this.database.db.prepare("SELECT * FROM context_projections WHERE id = ?").get(id) as Row | undefined;
+    return row ? contextFromRow(row) : undefined;
+  }
+
+  createModelAttempt(value: ModelAttempt): void {
+    this.database.db.prepare(`INSERT INTO model_attempts(
+      id, run_id, operation_id, attempt_number, previous_attempt_id, retry_of_attempt_id,
+      context_projection_id, request_artifact_id, event_artifact_id, provider_profile_json,
+      capabilities_json, status, started_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(value.id, value.runId, value.operationId, value.attemptNumber, value.previousAttemptId ?? null,
+        value.retryOfAttemptId ?? null, value.contextProjectionId, value.requestArtifactId ?? null,
+        value.eventArtifactId ?? null, JSON.stringify(value.providerProfile), JSON.stringify(value.capabilities),
+        value.status, value.startedAt);
+  }
+
+  finishModelAttempt(id: string, status: ModelAttemptStatus, fields: {
+    readonly endedAt: string; readonly finishReason?: string; readonly usage?: unknown;
+    readonly providerResponseId?: string; readonly error?: unknown; readonly retryDecision?: unknown;
+    readonly requestArtifactId?: string; readonly eventArtifactId?: string;
+  }): void {
+    this.database.db.prepare(`UPDATE model_attempts SET status=?, ended_at=?, finish_reason=?, usage_json=?,
+      provider_response_id=?, error_json=?, retry_decision_json=?,
+      request_artifact_id=COALESCE(?, request_artifact_id), event_artifact_id=COALESCE(?, event_artifact_id)
+      WHERE id=?`)
+      .run(status, fields.endedAt, fields.finishReason ?? null,
+        fields.usage === undefined ? null : JSON.stringify(fields.usage), fields.providerResponseId ?? null,
+        fields.error === undefined ? null : JSON.stringify(fields.error),
+        fields.retryDecision === undefined ? null : JSON.stringify(fields.retryDecision),
+        fields.requestArtifactId ?? null, fields.eventArtifactId ?? null, id);
+  }
+
+  listModelAttempts(runId: string): readonly ModelAttempt[] {
+    return (this.database.db.prepare("SELECT * FROM model_attempts WHERE run_id = ? ORDER BY attempt_number")
+      .all(runId) as Row[]).map(attemptFromRow);
+  }
+
   private insertRecord(record: RecordEntry): void {
     this.database.db.prepare("INSERT INTO records(id, session_id, run_id, kind, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run(record.id, record.sessionId, record.runId, record.kind, JSON.stringify(record.data), record.createdAt);
@@ -161,4 +226,37 @@ function operationFromRow(row: Row): Operation {
     ...(row.ended_at === null ? {} : { endedAt: String(row.ended_at) }),
     ...(row.error === null ? {} : { error: String(row.error) }),
     ...(row.result_json === null ? {} : { result: JSON.parse(String(row.result_json)) as unknown }) };
+}
+
+function artifactFromRow(row: Row): ArtifactMetadata {
+  return { id: String(row.id), kind: String(row.kind) as ArtifactMetadata["kind"],
+    mediaType: String(row.media_type), relativePath: String(row.relative_path),
+    status: String(row.status) as ArtifactMetadata["status"], byteLength: Number(row.byte_length),
+    createdAt: String(row.created_at), ...(row.sha256 === null ? {} : { sha256: String(row.sha256) }),
+    ...(row.finalized_at === null ? {} : { finalizedAt: String(row.finalized_at) }) };
+}
+function contextFromRow(row: Row): ContextProjection {
+  return { id: String(row.id), runId: String(row.run_id), projectorId: String(row.projector_id),
+    projectorVersion: String(row.projector_version),
+    includedRecordIds: JSON.parse(String(row.included_record_ids_json)) as string[],
+    excludedRecords: JSON.parse(String(row.excluded_records_json)) as { recordId: string; reason: string }[],
+    content: JSON.parse(String(row.content_json)) as ContextProjection["content"], createdAt: String(row.created_at),
+    ...(row.request_hash === null ? {} : { requestHash: String(row.request_hash) }) };
+}
+function attemptFromRow(row: Row): ModelAttempt {
+  return { id: String(row.id), runId: String(row.run_id), operationId: String(row.operation_id),
+    attemptNumber: Number(row.attempt_number), contextProjectionId: String(row.context_projection_id),
+    providerProfile: JSON.parse(String(row.provider_profile_json)) as ModelAttempt["providerProfile"],
+    capabilities: JSON.parse(String(row.capabilities_json)) as ModelAttempt["capabilities"],
+    status: String(row.status) as ModelAttemptStatus, startedAt: String(row.started_at),
+    ...(row.previous_attempt_id === null ? {} : { previousAttemptId: String(row.previous_attempt_id) }),
+    ...(row.retry_of_attempt_id === null ? {} : { retryOfAttemptId: String(row.retry_of_attempt_id) }),
+    ...(row.request_artifact_id === null ? {} : { requestArtifactId: String(row.request_artifact_id) }),
+    ...(row.event_artifact_id === null ? {} : { eventArtifactId: String(row.event_artifact_id) }),
+    ...(row.ended_at === null ? {} : { endedAt: String(row.ended_at) }),
+    ...(row.finish_reason === null ? {} : { finishReason: String(row.finish_reason) }),
+    ...(row.usage_json === null ? {} : { usage: JSON.parse(String(row.usage_json)) as NonNullable<ModelAttempt["usage"]> }),
+    ...(row.provider_response_id === null ? {} : { providerResponseId: String(row.provider_response_id) }),
+    ...(row.error_json === null ? {} : { error: JSON.parse(String(row.error_json)) as NonNullable<ModelAttempt["error"]> }),
+    ...(row.retry_decision_json === null ? {} : { retryDecision: JSON.parse(String(row.retry_decision_json)) as NonNullable<ModelAttempt["retryDecision"]> }) };
 }

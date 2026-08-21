@@ -54,7 +54,7 @@ test("file database rejects a second active writer and permits it after close", 
 
 test("schema migration is transactional", () => {
   const database = new KernelDatabase(":memory:");
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 1);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 2);
   assert.throws(() => database.transaction(() => {
     database.db.exec("CREATE TABLE should_rollback(value TEXT)");
     throw new Error("fail migration");

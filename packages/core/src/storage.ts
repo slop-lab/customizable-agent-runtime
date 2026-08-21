@@ -62,6 +62,53 @@ const schema = `
     data_json TEXT NOT NULL,
     published_at TEXT
   );
+
+  CREATE TABLE IF NOT EXISTS artifacts (
+    id TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    media_type TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    status TEXT NOT NULL,
+    byte_length INTEGER NOT NULL DEFAULT 0,
+    sha256 TEXT,
+    created_at TEXT NOT NULL,
+    finalized_at TEXT
+  );
+  CREATE TABLE IF NOT EXISTS context_projections (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    projector_id TEXT NOT NULL,
+    projector_version TEXT NOT NULL,
+    included_record_ids_json TEXT NOT NULL,
+    excluded_records_json TEXT NOT NULL,
+    content_json TEXT NOT NULL,
+    request_hash TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS model_attempts (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES runs(id),
+    operation_id TEXT NOT NULL REFERENCES operations(id),
+    attempt_number INTEGER NOT NULL,
+    previous_attempt_id TEXT REFERENCES model_attempts(id),
+    retry_of_attempt_id TEXT REFERENCES model_attempts(id),
+    context_projection_id TEXT NOT NULL REFERENCES context_projections(id),
+    request_artifact_id TEXT REFERENCES artifacts(id),
+    event_artifact_id TEXT REFERENCES artifacts(id),
+    provider_profile_json TEXT NOT NULL,
+    capabilities_json TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    finish_reason TEXT,
+    usage_json TEXT,
+    provider_response_id TEXT,
+    error_json TEXT,
+    retry_decision_json TEXT,
+    UNIQUE(run_id, attempt_number)
+  );
+
+  UPDATE schema_metadata SET version = 2 WHERE singleton = 1 AND version < 2;
 `;
 
 export class SerializedWriter {

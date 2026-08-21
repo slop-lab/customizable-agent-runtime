@@ -60,6 +60,42 @@ export interface ModelAttemptResult extends ProviderTurn {
   readonly attemptId: string;
 }
 
+export interface ContextProjection {
+  readonly id: string;
+  readonly runId: string;
+  readonly projectorId: string;
+  readonly projectorVersion: string;
+  readonly includedRecordIds: readonly string[];
+  readonly excludedRecords: readonly { readonly recordId: string; readonly reason: string }[];
+  readonly content: readonly NormalizedContent[];
+  readonly requestHash?: string;
+  readonly createdAt: string;
+}
+
+export type ModelAttemptStatus = "running" | "completed" | "failed" | "cancelled" | "abandoned";
+
+export interface ModelAttempt {
+  readonly id: string;
+  readonly runId: string;
+  readonly operationId: string;
+  readonly attemptNumber: number;
+  readonly previousAttemptId?: string;
+  readonly retryOfAttemptId?: string;
+  readonly contextProjectionId: string;
+  readonly requestArtifactId?: string;
+  readonly eventArtifactId?: string;
+  readonly providerProfile: ProviderProfile;
+  readonly capabilities: ProviderCapabilitiesV1;
+  readonly status: ModelAttemptStatus;
+  readonly startedAt: string;
+  readonly endedAt?: string;
+  readonly finishReason?: string;
+  readonly usage?: JsonObject;
+  readonly providerResponseId?: string;
+  readonly error?: JsonObject;
+  readonly retryDecision?: JsonObject;
+}
+
 export interface DriverContext {
   readonly sessionId: string;
   readonly runId: string;
