@@ -150,7 +150,8 @@ function optionalParameter(url: URL, name: string): string | undefined {
 async function readJson(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
   for await (const chunk of request) chunks.push(Buffer.from(chunk));
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown; }
+  catch { throw new RuntimeError("validation", "Request body must be valid JSON"); }
 }
 
 function isRunBody(value: unknown): value is { input: string } {

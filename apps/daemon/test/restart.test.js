@@ -13,6 +13,14 @@ test("daemon recovers persisted session history after a process restart", async 
   const sessionResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions`, { method: "POST" });
   assert.equal(sessionResponse.status, 201);
   const session = await sessionResponse.json();
+  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/sessions?limit=0`)).status, 400);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/sessions/missing/runs`)).status, 404);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/usage?sessionId=missing`)).status, 404);
+  const malformedResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions/${session.id}/runs`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{",
+  });
+  assert.equal(malformedResponse.status, 400);
+  assert.equal((await malformedResponse.json()).code, "validation");
   const runResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions/${session.id}/runs`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ input: "persist me" }),
   });
