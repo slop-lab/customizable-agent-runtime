@@ -1,8 +1,12 @@
 #!/usr/bin/env node
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { createDefaultRuntime } from "@car/defaults";
 
-const runtime = createDefaultRuntime();
+const dataDirectory = process.env.CAR_DATA_DIR ?? join(process.cwd(), ".car");
+mkdirSync(dataDirectory, { recursive: true });
+const runtime = createDefaultRuntime({ databasePath: join(dataDirectory, "runtime.sqlite") });
 const host = process.env.CAR_HOST ?? "127.0.0.1";
 const port = Number.parseInt(process.env.CAR_PORT ?? "4317", 10);
 
@@ -26,7 +30,7 @@ async function route(request: IncomingMessage, response: ServerResponse) {
     return;
   }
   if (request.method === "POST" && url.pathname === "/v1/sessions") {
-    send(response, 201, runtime.createSession());
+    send(response, 201, await runtime.createSession());
     return;
   }
 
@@ -75,3 +79,12 @@ function send(response: ServerResponse, status: number, body: unknown) {
 server.listen(port, host, () => {
   process.stdout.write(`CAR daemon listening on http://${host}:${port}\n`);
 });
+
+function shutdown() {
+  server.close(() => {
+    runtime.close();
+    process.exitCode = 0;
+  });
+}
+process.once("SIGINT", shutdown);
+process.once("SIGTERM", shutdown);

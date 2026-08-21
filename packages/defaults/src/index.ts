@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { ModelChunk, ModelRequest, Provider, RuntimeSystem, Tool } from "@car/core";
-import { Runtime, ToolDispatcher } from "@car/core";
+import { KernelDatabase, Runtime, ToolDispatcher } from "@car/core";
 
 export class FakeProvider implements Provider {
   readonly id = "fake.echo";
@@ -57,6 +57,15 @@ function isPathInput(input: unknown): input is { path: string } {
     typeof (input as { path?: unknown }).path === "string";
 }
 
-export function createDefaultRuntime(system?: RuntimeSystem): Runtime {
-  return new Runtime(new FakeProvider(), new ToolDispatcher([readTool]), system);
+export interface DefaultRuntimeOptions {
+  readonly system?: RuntimeSystem;
+  readonly databasePath?: string;
+}
+
+export function createDefaultRuntime(options: DefaultRuntimeOptions | RuntimeSystem = {}): Runtime {
+  const normalized = "clock" in options ? { system: options } : options;
+  return new Runtime(new FakeProvider(), new ToolDispatcher([readTool]), {
+    ...(normalized.system === undefined ? {} : { system: normalized.system }),
+    ...(normalized.databasePath === undefined ? {} : { database: new KernelDatabase(normalized.databasePath) }),
+  });
 }

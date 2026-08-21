@@ -102,7 +102,12 @@ export interface RecordEntry {
 
 export interface RuntimeEvent {
   readonly id: Id;
-  readonly type: "session.created" | "run.started" | "record.appended" | "run.finished";
+  readonly type:
+    | "session.created"
+    | "run.started"
+    | "record.appended"
+    | "run.finished"
+    | "operation.recovered";
   readonly occurredAt: string;
   readonly data: unknown;
 }
