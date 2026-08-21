@@ -28,7 +28,8 @@ export async function runAgentChat({ runtime, terminal, output, dataDirectory, i
       output.write("/send                 send the composed prompt\n/show                 preview it\n" +
         "/cancel               discard it\n/sessions [limit]     list durable sessions\n" +
         "/runs [session-id]   list runs\n/resume <session-id> select an existing session\n" +
-        "/new                  create and select a session\n/id                   show the current session ID\n" +
+        "/usage                show usage for the current session\n/new                  create and select a session\n" +
+        "/id                   show the current session ID\n" +
         "/exit                 quit\n\n");
       prompt(terminal); continue;
     }
@@ -44,6 +45,9 @@ export async function runAgentChat({ runtime, terminal, output, dataDirectory, i
       if (!runtime.getSession(id)) output.write(`[unknown session: ${id}]\n\n`);
       else printRuns(output, runtime.listRuns(id));
       prompt(terminal); continue;
+    }
+    if (command === "/usage") {
+      printUsage(output, runtime.usage({ sessionId: session.id })); prompt(terminal); continue;
     }
     if (command === "/resume" || command.startsWith("/resume ")) {
       const id = command.slice("/resume".length).trim();
@@ -111,6 +115,13 @@ function printRuns(output, runs) {
   for (const run of runs) output.write(`- ${run.id}  ${run.status}  ${run.startedAt} ` +
     `requests=${run.modelRequestCount} retries=${run.retryCount} tools=${run.toolOperationCount}\n`);
   output.write("\n");
+}
+function printUsage(output, report) {
+  const value = report.totals; const tokens = value.tokens.totalTokens ?? "unknown";
+  const cost = value.costUsd === undefined ? "unknown" : `$${value.costUsd.toFixed(6)}`;
+  output.write(`usage: runs=${value.runs} model-requests=${value.modelRequests} retries=${value.retries} ` +
+    `tokens=${tokens} cost=${cost} normalized=${value.coverage.normalizedUsage}/${value.modelRequests}\n` +
+    `outcomes: ${Object.entries(value.outcomes).map(([key, count]) => `${key}=${count}`).join(" ")}\n\n`);
 }
 function formatRunCounts(counts) {
   return Object.entries(counts).filter(([, value]) => value > 0)

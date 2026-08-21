@@ -20,6 +20,9 @@ test("interactive chat lists and resumes durable sessions without losing multili
     async createSession() { const value = { id: `new-session-${++created}`, createdAt: "2026-08-21T00:00:00.000Z" };
       sessions.set(value.id, value); records.set(value.id, []); return value; },
     getSession(id) { return sessions.get(id); },
+    usage() { return { totals: { runs: 1, modelRequests: 2, retries: 1, tokens: { totalTokens: 12 },
+      costUsd: 0.01, coverage: { normalizedUsage: 2, cost: 1 },
+      outcomes: { running: 0, completed: 1, failed: 1, cancelled: 0, abandoned: 0 } } }; },
     listSessions() { return [...sessions.values()].map((session) => ({ ...session, updatedAt: session.createdAt,
       recordCount: records.get(session.id).length, runCount: 0,
       runStatusCounts: { running: 0, completed: 0, failed: 0, cancelled: 0 } })); },
@@ -29,11 +32,12 @@ test("interactive chat lists and resumes durable sessions without losing multili
       const run = { id: "run", sessionId, status: "completed", startedAt: "now", endedAt: "now" };
       return { run: { ...run, status: "running" }, completion: Promise.resolve(run), cancel() { return true; } }; },
   };
-  const terminal = new FakeTerminal(["/sessions", "/resume old-session", "first", "second", "/send", "/runs", "/id", "/exit"]);
+  const terminal = new FakeTerminal(["/sessions", "/resume old-session", "/usage", "first", "second", "/send", "/runs", "/id", "/exit"]);
   const output = new FakeOutput();
   await runAgentChat({ runtime, terminal, output, dataDirectory: "/data" });
   assert.deepEqual(ran, { sessionId: "old-session", input: "first\nsecond" });
   assert.match(output.value, /resumed session old-session/); assert.match(output.value, /agent> done/);
+  assert.match(output.value, /usage: runs=1 model-requests=2 retries=1 tokens=12 cost=\$0\.010000/);
   assert.match(output.value, /\nold-session\n/);
 });
 
