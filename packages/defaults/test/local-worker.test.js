@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +10,7 @@ import { workerConformance } from "./worker-conformance.js";
 
 function fixture(options = {}) {
   const root = mkdtempSync(join(tmpdir(), "car-worker-"));
+  execFileSync("git", ["init", "-q"], { cwd: root });
   writeFileSync(join(root, "hello.txt"), "hello worker");
   return { root, worker: new LocalDevelopmentWorker({ workspace: "workspace", root, ...options }) };
 }
@@ -23,7 +25,10 @@ workerConformance("local development worker", () => {
 
 workerConformance("fake worker", () => ({ worker: new FakeWorker((value) => {
   if (value.workspace !== "workspace") return { ok: false, code: "invalid-scope", message: "scope" };
-  return { ok: true, output: value.type === "readFile" ? "hello worker" : "shell" };
+  if (value.type === "readFile") return { ok: true, output: "hello worker" };
+  if (value.type === "list") return { ok: true, output: "hello.txt" };
+  if (value.type === "gitStatus") return { ok: true, output: "?? hello.txt" };
+  return { ok: true, output: "shell" };
 }) }));
 
 test("local worker rejects traversal and symlink escape", async () => {

@@ -176,7 +176,26 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
         ...(value.cwd === undefined ? {} : { cwd: value.cwd }) }, context.signal));
     },
   };
-  return [read, shell];
+  const list: Tool = {
+    description: { name: "list", description: "List a directory through the workspace worker.",
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+      validateInput: (input) => isOptionalPathInput(input) ? undefined : "Expected an object with an optional string path." },
+    async execute(input, context) {
+      const value = input as { path?: string };
+      return toolResult(await worker.execute({ type: "list", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline, path: value.path ?? "." }, context.signal));
+    },
+  };
+  const gitStatus: Tool = {
+    description: { name: "git_status", description: "Show concise Git workspace status.",
+      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      validateInput: (input) => isEmptyObject(input) ? undefined : "Expected an empty object." },
+    async execute(_input, context) {
+      return toolResult(await worker.execute({ type: "gitStatus", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline }, context.signal));
+    },
+  };
+  return [read, list, shell, gitStatus];
 }
 
 function toolResult(response: WorkerResponse) {
@@ -190,6 +209,13 @@ function isPathInput(input: unknown): input is { path: string } {
 function isCommandInput(input: unknown): input is { command: string; cwd?: string } {
   if (typeof input !== "object" || input === null || !("command" in input) || typeof (input as { command?: unknown }).command !== "string") return false;
   return !("cwd" in input) || (input as { cwd?: unknown }).cwd === undefined || typeof (input as { cwd?: unknown }).cwd === "string";
+}
+function isOptionalPathInput(input: unknown): input is { path?: string } {
+  return typeof input === "object" && input !== null && (!("path" in input) ||
+    (input as { path?: unknown }).path === undefined || typeof (input as { path?: unknown }).path === "string");
+}
+function isEmptyObject(input: unknown): input is Record<string, never> {
+  return typeof input === "object" && input !== null && !Array.isArray(input) && Object.keys(input).length === 0;
 }
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;

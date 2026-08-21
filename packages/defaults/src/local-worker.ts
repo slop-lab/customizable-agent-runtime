@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { readFile, realpath } from "node:fs/promises";
+import { readFile, readdir, realpath } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ExecutionWorker, WorkerRequest, WorkerResponse, WorkspaceHandle } from "@car/core";
@@ -35,6 +35,21 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
         const output = await readFile(path, "utf8");
         if (Buffer.byteLength(output) > this.#maxOutputBytes) return failure("output-limit", "File exceeds worker output limit");
         return { ok: true, output };
+      }
+      if (request.type === "list") {
+        const path = await this.#resolve(request.path, request.cwd);
+        const entries = await readdir(path, { withFileTypes: true });
+        const output = entries.sort((a, b) => a.name.localeCompare(b.name))
+          .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`).join("\n");
+        if (Buffer.byteLength(output) > this.#maxOutputBytes) return failure("output-limit", "Directory listing exceeds worker output limit");
+        return { ok: true, output, metadata: { entries: entries.length } };
+      }
+      if (request.type === "gitStatus") {
+        const cwd = await this.#resolve(".", request.cwd);
+        const result = await execFileAsync("git", ["status", "--short", "--branch"], {
+          cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxOutputBytes,
+        });
+        return { ok: true, output: `${result.stdout}${result.stderr}` };
       }
       if (request.type !== "shell") return failure("worker-failed", `Unsupported development worker request: ${request.type}`);
       const cwd = await this.#resolve(".", request.cwd);
