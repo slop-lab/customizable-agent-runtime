@@ -22,6 +22,7 @@ export interface UsageCounters {
   readonly coverage: {
     readonly normalizedUsage: number;
     readonly cost: number;
+    readonly tokens: Readonly<Record<keyof Omit<NormalizedUsageV1, "version" | "costUsd">, number>>;
   };
 }
 
@@ -68,6 +69,10 @@ function counters(values: readonly UsageAttempt[]): UsageCounters {
     cacheWriteTokens: 0, totalTokens: 0,
   };
   const tokenCoverage = new Set<keyof typeof tokenSums>();
+  const tokenCoverageCounts: Record<keyof typeof tokenSums, number> = {
+    inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0,
+    cacheWriteTokens: 0, totalTokens: 0,
+  };
   let retries = 0; let normalizedUsage = 0; let costCoverage = 0; let costUsd = 0;
   for (const value of values) {
     const attempt = value.attempt;
@@ -78,11 +83,14 @@ function counters(values: readonly UsageAttempt[]): UsageCounters {
     if (attempt.normalizedUsage) {
       normalizedUsage++;
       for (const key of Object.keys(tokenSums) as (keyof typeof tokenSums)[]) {
-        const number = attempt.normalizedUsage[key];
-        if (number !== undefined) { tokenSums[key] += number; tokenCoverage.add(key); }
+        const number = usageNumber(attempt.normalizedUsage[key]);
+        if (number !== undefined) {
+          tokenSums[key] += number; tokenCoverage.add(key); tokenCoverageCounts[key]++;
+        }
       }
-      if (attempt.normalizedUsage.costUsd !== undefined) {
-        costCoverage++; costUsd += attempt.normalizedUsage.costUsd;
+      const reportedCost = usageNumber(attempt.normalizedUsage.costUsd);
+      if (reportedCost !== undefined) {
+        costCoverage++; costUsd += reportedCost;
       }
     }
   }
@@ -91,5 +99,9 @@ function counters(values: readonly UsageAttempt[]): UsageCounters {
   return { sessions: sessions.size, runs: runs.size, modelRequests: values.length, retries,
     outcomes, errorCodes: Object.fromEntries(Object.entries(errorCodes).sort(([a], [b]) => a.localeCompare(b))),
     tokens, ...(costCoverage > 0 ? { costUsd } : {}),
-    coverage: { normalizedUsage, cost: costCoverage } };
+    coverage: { normalizedUsage, cost: costCoverage, tokens: tokenCoverageCounts } };
+}
+
+function usageNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }

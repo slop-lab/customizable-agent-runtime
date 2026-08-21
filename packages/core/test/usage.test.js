@@ -35,7 +35,10 @@ test("usage aggregation separates requests, retries, outcomes, native coverage, 
   assert.deepEqual(report.totals.tokens, { inputTokens: 20, outputTokens: 2,
     reasoningTokens: 4, totalTokens: 23 });
   assert.equal(report.totals.costUsd, 0.25);
-  assert.deepEqual(report.totals.coverage, { normalizedUsage: 3, cost: 1 });
+  assert.deepEqual(report.totals.coverage, { normalizedUsage: 3, cost: 1, tokens: {
+    inputTokens: 3, outputTokens: 1, reasoningTokens: 1, cacheReadTokens: 0,
+    cacheWriteTokens: 0, totalTokens: 2,
+  } });
   assert.deepEqual(report.byProviderModel.map((group) => group.key), ["google/gemini", "openrouter/model"]);
   assert.equal(report.byRun.find((group) => group.key === "run-2").retries, 0);
 });
@@ -45,4 +48,18 @@ test("missing provider cost remains unknown instead of becoming zero", () => {
     { normalizedUsage: { version: 1, totalTokens: 1 } })]);
   assert.equal(report.totals.costUsd, undefined);
   assert.equal(report.totals.coverage.cost, 0);
+});
+
+test("malformed normalized usage values do not corrupt sums or coverage", () => {
+  const report = aggregateUsage([attempt("a1", "run", "custom", "model", { normalizedUsage: {
+    version: 1, inputTokens: "bad", outputTokens: -1, reasoningTokens: Number.NaN,
+    cacheReadTokens: Number.POSITIVE_INFINITY, totalTokens: 4, costUsd: -2,
+  } })]);
+  assert.deepEqual(report.totals.tokens, { totalTokens: 4 });
+  assert.equal(report.totals.costUsd, undefined);
+  assert.equal(report.totals.coverage.normalizedUsage, 1);
+  assert.deepEqual(report.totals.coverage.tokens, {
+    inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0,
+    cacheWriteTokens: 0, totalTokens: 1,
+  });
 });

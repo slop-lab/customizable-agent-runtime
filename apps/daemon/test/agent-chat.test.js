@@ -21,7 +21,7 @@ test("interactive chat lists and resumes durable sessions without losing multili
       sessions.set(value.id, value); records.set(value.id, []); return value; },
     getSession(id) { return sessions.get(id); },
     usage() { return { totals: { runs: 1, modelRequests: 2, retries: 1, tokens: { totalTokens: 12 },
-      costUsd: 0.01, coverage: { normalizedUsage: 2, cost: 1 },
+      costUsd: 0.01, coverage: { normalizedUsage: 2, cost: 1, tokens: { totalTokens: 2 } },
       outcomes: { running: 0, completed: 1, failed: 1, cancelled: 0, abandoned: 0 } } }; },
     listSessions() { return [...sessions.values()].map((session) => ({ ...session, updatedAt: session.createdAt,
       recordCount: records.get(session.id).length, runCount: 0,

@@ -33,7 +33,10 @@ test("daemon recovers persisted session history after a process restart", async 
   const usage = await usageResponse.json();
   assert.equal(usage.totals.modelRequests, 1);
   assert.equal(usage.totals.retries, 0);
-  assert.deepEqual(usage.totals.coverage, { normalizedUsage: 0, cost: 0 });
+  assert.deepEqual(usage.totals.coverage, { normalizedUsage: 0, cost: 0, tokens: {
+    inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheReadTokens: 0,
+    cacheWriteTokens: 0, totalTokens: 0,
+  } });
   await stopDaemon(daemon, "SIGKILL");
 
   daemon = await startDaemon(dataDirectory, port);

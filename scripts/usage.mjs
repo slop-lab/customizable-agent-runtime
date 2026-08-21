@@ -53,7 +53,8 @@ function printReport(report) {
     `tokens: ${formatTokens(totals.tokens)}\n` +
     `cost: ${totals.costUsd === undefined ? "unknown" : `$${totals.costUsd.toFixed(6)}`} ` +
     `(reported by ${totals.coverage.cost}/${totals.modelRequests} requests)\n` +
-    `normalized usage: ${totals.coverage.normalizedUsage}/${totals.modelRequests} requests\n`);
+    `normalized usage: ${totals.coverage.normalizedUsage}/${totals.modelRequests} requests\n` +
+    `token coverage: ${formatTokenCoverage(totals.coverage.tokens, totals.modelRequests)}\n`);
   if (report.byProviderModel.length > 0) {
     process.stdout.write("\nprovider/model\n");
     for (const group of report.byProviderModel) process.stdout.write(
@@ -70,4 +71,11 @@ function formatTokens(tokens) {
     ["cache-write", tokens.cacheWriteTokens], ["total", tokens.totalTokens]]
     .filter(([, value]) => value !== undefined).map(([key, value]) => `${key}=${value}`);
   return values.length === 0 ? "unknown" : values.join(" ");
+}
+function formatTokenCoverage(coverage, requests) {
+  const values = [["input", coverage.inputTokens], ["output", coverage.outputTokens],
+    ["reasoning", coverage.reasoningTokens], ["cache-read", coverage.cacheReadTokens],
+    ["cache-write", coverage.cacheWriteTokens], ["total", coverage.totalTokens]]
+    .map(([key, value]) => `${key}=${value}/${requests}`);
+  return values.join(" ");
 }

@@ -41,8 +41,8 @@ command receipts, an event outbox, context and usage projections, model
 attempts, and provider artifacts. Its typed development worker supports read,
 directory-listing, regex search, full-file write, unified-diff patch, shell, and
 Git-status execution. Branching, suspension, module state, large tool-output
-projection, and an isolated worker remain planned kernel capabilities. The canonical remote
-protocol will be WebSocket JSON-RPC 2.0; the current small HTTP endpoint and its
+projection, and an isolated worker remain planned kernel capabilities. The
+canonical remote protocol will be WebSocket JSON-RPC 2.0; the current small HTTP endpoint and its
 list/usage inspectors are disposable spike code.
 
 ## Provider boundary

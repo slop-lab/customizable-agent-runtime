@@ -88,7 +88,8 @@ just usage --session SESSION_ID --json
 `just usage` is a client of the daemon API, not a direct SQLite reader. Only one
 writer may own `.car/runtime.sqlite`, so stop `just chat`, start `just start`,
 and then use the standalone command. Inside chat, `/usage` inspects the active
-session directly.
+session directly. Aggregates report per-field token and provider-reported cost
+coverage so missing values remain distinguishable from numeric zero.
 
 ### Interactive agent test
 
