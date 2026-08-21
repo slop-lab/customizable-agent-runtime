@@ -1,6 +1,7 @@
 export * from "./contracts.js";
 export * from "./agent-contracts.js";
 export * from "./artifacts.js";
+export * from "./context-projector.js";
 export * from "./domain.js";
 export * from "./errors.js";
 export * from "./persistence.js";

@@ -100,7 +100,7 @@ export interface Run {
   readonly error?: string;
 }
 
-export type RecordKind = "user" | "assistant" | "tool-call" | "tool-result" | "error";
+export type RecordKind = "user" | "assistant" | "tool-call" | "tool-result" | "provider-native" | "error";
 
 export interface RecordEntry {
   readonly id: Id;

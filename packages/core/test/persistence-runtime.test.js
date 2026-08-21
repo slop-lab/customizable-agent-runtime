@@ -4,17 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { KernelDatabase, Runtime, RuntimeRepository, ToolDispatcher } from "../dist/index.js";
+import { appendOneTurnDriver, providerFrom } from "./agent-fixtures.js";
 
-const provider = {
-  id: "fake",
-  capabilities: { streaming: true, toolCalls: false, parallelToolCalls: false, cancellation: true },
-  async *stream() { yield { content: { type: "text", text: "persisted" } }; },
-};
+const provider = providerFrom(async () => ({ content: [{ type: "text", role: "assistant", text: "persisted" }] }));
+const tools = new ToolDispatcher([]);
 
 test("sessions, terminal runs, records, and operations survive restart", async () => {
   const directory = mkdtempSync(join(tmpdir(), "car-runtime-"));
   const path = join(directory, "runtime.sqlite");
-  let runtime = new Runtime(provider, new ToolDispatcher([]), { database: new KernelDatabase(path) });
+  let runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
   const session = await runtime.createSession("stable-command");
   const duplicate = await runtime.createSession("stable-command");
   assert.deepEqual(duplicate, session);
@@ -22,11 +20,11 @@ test("sessions, terminal runs, records, and operations survive restart", async (
   assert.equal(run.status, "completed");
   runtime.close();
 
-  runtime = new Runtime(provider, new ToolDispatcher([]), { database: new KernelDatabase(path) });
+  runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
   assert.deepEqual(runtime.getSession(session.id), session);
   assert.equal(runtime.getRun(run.id).status, "completed");
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user", "assistant"]);
-  assert.deepEqual(runtime.getOperations(run.id).map((operation) => operation.status), ["completed"]);
+  assert.deepEqual(runtime.getOperations(run.id).map((operation) => operation.status), ["completed", "completed"]);
   runtime.close();
   rmSync(directory, { recursive: true, force: true });
 });
@@ -46,11 +44,11 @@ test("a command failure rolls back materialized state and its receipt", () => {
 test("committed outbox events publish after a restart", async () => {
   const directory = mkdtempSync(join(tmpdir(), "car-outbox-"));
   const path = join(directory, "runtime.sqlite");
-  let runtime = new Runtime(provider, new ToolDispatcher([]), { database: new KernelDatabase(path) });
+  let runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
   const session = await runtime.createSession("event-command");
   runtime.close();
 
-  runtime = new Runtime(provider, new ToolDispatcher([]), { database: new KernelDatabase(path) });
+  runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
   const events = [];
   runtime.subscribe((event) => events.push(event));
   assert.equal(events.filter((event) => event.type === "session.created").length, 1);
@@ -60,7 +58,7 @@ test("committed outbox events publish after a restart", async () => {
 });
 
 test("outbox retains the same event for retry when publication fails", async () => {
-  const runtime = new Runtime(provider, new ToolDispatcher([]));
+  const runtime = new Runtime(provider, appendOneTurnDriver, tools);
   const session = await runtime.createSession("retry-event");
   let failedId;
   assert.throws(() => runtime.subscribe((event) => { failedId = event.id; throw new Error("consumer failed"); }));
@@ -83,7 +81,7 @@ test("startup abandons stale running operations without changing terminal operat
   });
   database.close();
 
-  const runtime = new Runtime(provider, new ToolDispatcher([]), { database: new KernelDatabase(path) });
+  const runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
   assert.equal(runtime.getOperations("run").find((operation) => operation.id === "running").status, "abandoned");
   assert.equal(runtime.getOperations("run").find((operation) => operation.id === "done").status, "completed");
   assert.equal(runtime.getRun("run").status, "failed");

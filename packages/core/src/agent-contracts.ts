@@ -3,7 +3,7 @@ import type { RecordEntry, ToolDescription, ToolResult } from "./contracts.js";
 export type JsonObject = Readonly<Record<string, unknown>>;
 
 export type NormalizedContent =
-  | { readonly type: "text"; readonly text: string }
+  | { readonly type: "text"; readonly role: "system" | "user" | "assistant"; readonly text: string }
   | { readonly type: "tool-call"; readonly callId: string; readonly toolName: string; readonly input: unknown }
   | { readonly type: "tool-result"; readonly callId: string; readonly output: unknown; readonly isError: boolean }
   | { readonly type: "provider-native"; readonly provider: string; readonly value: unknown };
@@ -42,7 +42,7 @@ export interface ProviderTurn {
 
 export interface ModelInvocationRequest {
   readonly attemptId: string;
-  readonly records: readonly RecordEntry[];
+  readonly context: ContextProjection;
   readonly tools: readonly ToolDescription[];
   readonly signal: AbortSignal;
   recordRequest(payload: unknown): void;
@@ -58,6 +58,17 @@ export interface ModelProvider {
 
 export interface ModelAttemptResult extends ProviderTurn {
   readonly attemptId: string;
+}
+
+export class ProviderInvocationError extends Error {
+  constructor(readonly code: string, message: string, readonly retryable: boolean,
+    readonly details?: JsonObject) { super(message); this.name = "ProviderInvocationError"; }
+}
+
+export class ModelAttemptFailure extends Error {
+  constructor(readonly attemptId: string, readonly providerError: ProviderInvocationError) {
+    super(providerError.message); this.name = "ModelAttemptFailure";
+  }
 }
 
 export interface ContextProjection {
@@ -103,6 +114,7 @@ export interface DriverContext {
   records(): readonly RecordEntry[];
   tools(): readonly ToolDescription[];
   invokeModel(): Promise<ModelAttemptResult>;
+  recordRetryDecision(attemptId: string, decision: JsonObject): Promise<void>;
   append(content: NormalizedContent): Promise<void>;
   dispatch(call: Extract<NormalizedContent, { type: "tool-call" }>): Promise<ToolResult>;
 }

@@ -200,6 +200,11 @@ export class RuntimeRepository {
       .all(runId) as Row[]).map(attemptFromRow);
   }
 
+  setAttemptRetryDecision(id: string, decision: unknown): void {
+    this.database.db.prepare("UPDATE model_attempts SET retry_decision_json = ? WHERE id = ?")
+      .run(JSON.stringify(decision), id);
+  }
+
   private insertRecord(record: RecordEntry): void {
     this.database.db.prepare("INSERT INTO records(id, session_id, run_id, kind, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run(record.id, record.sessionId, record.runId, record.kind, JSON.stringify(record.data), record.createdAt);
