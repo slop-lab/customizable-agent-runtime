@@ -83,6 +83,7 @@ export class DemoAgentDriver implements AgentDriver {
       let turn: Awaited<ReturnType<DriverContext["invokeModel"]>>;
       try { turn = await context.invokeModel(retryOfAttemptId === undefined ? {} : { retryOfAttemptId }); }
       catch (error) {
+        context.signal.throwIfAborted();
         if (!(error instanceof ModelAttemptFailure) || !error.providerError.retryable || retries >= this.#maximumRetries) throw error;
         retries++;
         const backoffMs = Math.min(250 * (2 ** (retries - 1)), 2_000);

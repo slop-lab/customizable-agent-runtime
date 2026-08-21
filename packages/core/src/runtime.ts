@@ -236,8 +236,10 @@ export class Runtime {
       this.#publishPending(); return { attemptId, ...turn };
     } catch (error) {
       const endedAt = this.#system.clock.now();
-      const providerError = error instanceof ProviderInvocationError ? error
-        : signal.aborted ? new ProviderInvocationError("provider.cancelled", "Model invocation cancelled", false)
+      const providerError = signal.aborted
+        ? error instanceof ProviderInvocationError && error.code === "provider.cancelled" ? error
+          : new ProviderInvocationError("provider.cancelled", "Model invocation cancelled", false)
+        : error instanceof ProviderInvocationError ? error
           : new ProviderInvocationError("provider.internal", error instanceof Error ? error.message : String(error), false);
       const status = signal.aborted ? "cancelled" : "failed";
       const requestArtifact = requestWriter.finalize("failed", endedAt);

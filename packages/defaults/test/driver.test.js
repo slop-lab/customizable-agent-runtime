@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FakeWorker } from "@car/core";
+import { FakeWorker, ProviderInvocationError } from "@car/core";
 import { createDefaultRuntime, DemoAgentDriver, FakeProvider } from "../dist/index.js";
 
 test("default runtime exposes the complete development workspace tool set", () => {
@@ -53,6 +53,30 @@ test("demo driver records every retry decision and eventual success", async () =
   assert.deepEqual(attempts.map((attempt) => attempt.status), ["failed", "completed"]);
   assert.deepEqual(attempts[0].retryDecision, { retry: true, reason: "temporary", retryNumber: 1, backoffMs: 250 });
   assert.equal(attempts[1].retryOfAttemptId, attempts[0].id);
+  runtime.close();
+});
+
+test("demo driver does not schedule a retry after cancellation wins a provider race", async () => {
+  let providerStarted; let releaseProvider; let sleepCount = 0;
+  const started = new Promise((resolve) => { providerStarted = resolve; });
+  const released = new Promise((resolve) => { releaseProvider = resolve; });
+  const provider = { id: "cancel-race", profile: { id: "cancel-race", provider: "fake", model: "cancel-race",
+    endpoint: "fake://cancel-race", credentialHandle: "none" },
+    capabilities: { version: 1, values: {} }, async invoke(request) {
+      request.recordRequest({}); providerStarted(); await released;
+      throw new ProviderInvocationError("transport.network", "late network failure", true);
+    } };
+  const driver = new DemoAgentDriver({ sleep: async () => { sleepCount++; } });
+  const runtime = createDefaultRuntime({ provider, driver,
+    worker: new FakeWorker(() => ({ ok: true, output: "unused" })) });
+  const session = await runtime.createSession("session");
+  const execution = await runtime.startRun(session.id, "cancel provider");
+  await started; execution.cancel(); releaseProvider();
+  const run = await execution.completion;
+  assert.equal(run.status, "cancelled"); assert.equal(sleepCount, 0);
+  assert.equal(runtime.getModelAttempts(run.id).length, 1);
+  assert.equal(runtime.getModelAttempts(run.id)[0].retryDecision, undefined);
+  assert.equal(runtime.getModelAttempts(run.id)[0].error.code, "provider.cancelled");
   runtime.close();
 });
 
