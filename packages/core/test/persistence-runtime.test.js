@@ -77,13 +77,21 @@ test("startup abandons stale running operations without changing terminal operat
     database.db.prepare("INSERT INTO sessions(id, created_at) VALUES ('session', 'start')").run();
     database.db.prepare("INSERT INTO runs(id, session_id, status, started_at) VALUES ('run', 'session', 'running', 'start')").run();
     database.db.prepare("INSERT INTO operations(id, run_id, kind, status, started_at) VALUES ('running', 'run', 'run', 'running', 'start')").run();
+    database.db.prepare("INSERT INTO operations(id, run_id, kind, status, started_at) VALUES ('model', 'run', 'model', 'running', 'start')").run();
     database.db.prepare("INSERT INTO operations(id, run_id, kind, status, started_at, ended_at) VALUES ('done', 'run', 'tool', 'completed', 'start', 'end')").run();
+    database.db.prepare(`INSERT INTO context_projections
+      (id, run_id, projector_id, projector_version, included_record_ids_json, excluded_records_json, content_json, created_at)
+      VALUES ('context', 'run', 'test', '1', '[]', '[]', '[]', 'start')`).run();
+    database.db.prepare(`INSERT INTO model_attempts
+      (id, run_id, operation_id, attempt_number, context_projection_id, provider_profile_json, capabilities_json, status, started_at)
+      VALUES ('attempt', 'run', 'model', 1, 'context', '{}', '{"version":1,"values":{}}', 'running', 'start')`).run();
   });
   database.close();
 
   const runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
   assert.equal(runtime.getOperations("run").find((operation) => operation.id === "running").status, "abandoned");
   assert.equal(runtime.getOperations("run").find((operation) => operation.id === "done").status, "completed");
+  assert.equal(runtime.getModelAttempts("run")[0].status, "abandoned");
   assert.equal(runtime.getRun("run").status, "failed");
   runtime.close();
   rmSync(directory, { recursive: true, force: true });

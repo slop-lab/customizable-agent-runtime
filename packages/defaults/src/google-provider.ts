@@ -81,7 +81,8 @@ export class GoogleInteractionsProvider implements ModelProvider {
       applyStreamEvent(steps, event);
       if (eventType === "interaction.completed") completed = asObject(event.interaction);
     }
-    const finalSteps = Array.isArray(completed?.steps) ? completed.steps.map(asObject) : [...steps.values()];
+    const finalSteps = (Array.isArray(completed?.steps) ? completed.steps.map(asObject) : [...steps.values()])
+      .map(finalizeStreamStep);
     const content: NormalizedContent[] = [];
     for (const step of finalSteps) {
       content.push(...normalizeGoogleStep(step));
@@ -116,6 +117,16 @@ export async function* parseSseJson(stream: ReadableStream<Uint8Array>, signal: 
 
 function projectGoogleInput(content: readonly NormalizedContent[]): unknown[] {
   const hasNativeGoogleSteps = content.some((value) => value.type === "provider-native" && value.provider === "google.interactions");
+  const toolNames = new Map<string, string>();
+  for (const item of content) {
+    if (item.type === "tool-call") toolNames.set(item.callId, item.toolName);
+    if (item.type === "provider-native" && item.provider === "google.interactions") {
+      const step = asObject(item.value);
+      if (step.type === "function_call" && typeof step.id === "string" && typeof step.name === "string") {
+        toolNames.set(step.id, step.name);
+      }
+    }
+  }
   const input: unknown[] = [];
   for (const item of content) {
     if (item.type === "provider-native" && item.provider === "google.interactions") { input.push(item.value); continue; }
@@ -131,7 +142,7 @@ function projectGoogleInput(content: readonly NormalizedContent[]): unknown[] {
     if (item.type === "tool-call" && !hasNativeGoogleSteps) {
       input.push({ type: "function_call", id: item.callId, name: item.toolName, arguments: item.input }); continue;
     }
-    if (item.type === "tool-result") input.push({ type: "function_result", call_id: item.callId,
+    if (item.type === "tool-result") input.push({ type: "function_result", name: toolNames.get(item.callId), call_id: item.callId,
       is_error: item.isError, result: [{ type: "text", text: typeof item.output === "string" ? item.output : JSON.stringify(item.output) }] });
   }
   return input;
@@ -151,10 +162,21 @@ function applyStreamEvent(steps: Map<number, Record<string, unknown>>, event: Re
     else content.push({ type: "text", text: delta.text });
     step.type ??= "model_output"; step.content = content;
   } else if (type === "arguments" || type === "arguments_delta") {
-    const partial = stringValue(delta.partial_arguments) ?? stringValue(delta.arguments_delta) ?? "";
+    const partial = stringValue(delta.partial_arguments) ?? stringValue(delta.arguments_delta) ?? stringValue(delta.arguments) ?? "";
     step.__partialArguments = `${stringValue(step.__partialArguments) ?? ""}${partial}`;
+  } else if (type === "thought_signature" && typeof delta.signature === "string") {
+    step.signature = delta.signature;
   }
   steps.set(index, step);
+}
+
+function finalizeStreamStep(value: Record<string, unknown>): Record<string, unknown> {
+  const step = structuredClone(value);
+  if (step.type === "function_call" && typeof step.__partialArguments === "string" && step.__partialArguments.length > 0) {
+    step.arguments = parseJson(step.__partialArguments);
+  }
+  delete step.__partialArguments;
+  return step;
 }
 
 function normalizeGoogleStep(step: Record<string, unknown>): NormalizedContent[] {

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, renameSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from "node:fs";
 import { join } from "node:path";
 
 export type ArtifactStatus = "partial" | "completed" | "failed";
@@ -63,5 +63,10 @@ export class ArtifactStore {
     const writer = this.create(id, kind, "application/json", createdAt);
     writer.append(JSON.stringify(value));
     return writer.finalize("completed", createdAt);
+  }
+
+  read(metadata: ArtifactMetadata): string {
+    if (!/^[A-Za-z0-9._-]+$/.test(metadata.relativePath)) throw new Error(`Unsafe artifact path: ${metadata.relativePath}`);
+    return readFileSync(join(this.root, metadata.relativePath), "utf8");
   }
 }

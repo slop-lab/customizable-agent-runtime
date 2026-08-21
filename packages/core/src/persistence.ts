@@ -116,6 +116,10 @@ export class RuntimeRepository {
       for (const row of rows) {
         const operation = operationFromRow(row);
         this.transitionOperation(operation.id, "abandoned", now, undefined, "abandoned after daemon restart");
+        this.database.db.prepare(`UPDATE model_attempts
+          SET status = 'abandoned', ended_at = ?, error_json = ?
+          WHERE operation_id = ? AND status = 'running'`)
+          .run(now, JSON.stringify({ code: "runtime.abandoned", message: "abandoned after daemon restart", retryable: false }), operation.id);
         if (operation.kind === "run") {
           this.database.db.prepare("UPDATE runs SET status = 'failed', ended_at = ?, error = ? WHERE id = ? AND status = 'running'")
             .run(now, "abandoned after daemon restart", operation.runId);

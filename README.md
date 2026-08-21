@@ -46,11 +46,30 @@ curl -X POST http://127.0.0.1:4317/v1/sessions
 ```
 
 The current implementation is a durable kernel spike. It persists sessions,
-runs, operations, records, command receipts, and an event outbox in SQLite;
-recovers abandoned operations after restart; and routes default read and shell
-tools through a typed workspace worker. The fake provider remains the only
-provider, and the HTTP endpoint remains disposable pending the canonical
-WebSocket JSON-RPC contract. It does not claim production readiness.
+runs, operations, model attempts, normalized context projections, provider
+request/event artifacts, records, command receipts, and an event outbox in
+SQLite. It recovers abandoned work after restart and routes default read and
+shell tools through a typed workspace worker. A fake provider supports
+deterministic tests, while the Google Interactions adapter supports a real
+stateless model-tool-model loop. It does not claim production readiness.
+
+### Google live smoke test
+
+Copy `.env.example` to `.env`, set `TEMPORARY_GEMINI_API_KEY`, then run:
+
+```bash
+just test-live-google
+```
+
+The smoke test requires the model to read this repository's `package.json`,
+checks that two successful model attempts and the tool records were persisted,
+and expects the final answer `@car/workspace`. The key is resolved only by the
+HTTP transport and is excluded from request and event artifacts.
+
+Operators can inspect a run through `GET /v1/runs/{id}/operations`,
+`GET /v1/runs/{id}/attempts`, and the linked context and artifact endpoints.
+`GET /v1/artifacts/{id}/content` returns the persisted, redacted request or
+semantic-event stream for local development inspection.
 
 ## Developing with DIM
 

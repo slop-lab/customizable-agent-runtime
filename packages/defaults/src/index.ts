@@ -74,20 +74,23 @@ export class DemoAgentDriver implements AgentDriver {
   async run(context: DriverContext): Promise<void> {
     const calls = new Map<string, number>();
     let retries = 0;
+    let retryOfAttemptId: string | undefined;
     for (let attemptNumber = 1; attemptNumber <= this.#maximumAttempts; attemptNumber++) {
       context.signal.throwIfAborted();
       let turn: Awaited<ReturnType<DriverContext["invokeModel"]>>;
-      try { turn = await context.invokeModel(); }
+      try { turn = await context.invokeModel(retryOfAttemptId === undefined ? {} : { retryOfAttemptId }); }
       catch (error) {
         if (!(error instanceof ModelAttemptFailure) || !error.providerError.retryable || retries >= this.#maximumRetries) throw error;
         retries++;
         const backoffMs = Math.min(250 * (2 ** (retries - 1)), 2_000);
         await context.recordRetryDecision(error.attemptId, { retry: true, reason: error.providerError.code,
           retryNumber: retries, backoffMs });
+        retryOfAttemptId = error.attemptId;
         await this.#sleep(backoffMs, context.signal);
         continue;
       }
       retries = 0;
+      retryOfAttemptId = undefined;
       for (const content of turn.content) await context.append(content);
       const toolCalls = turn.content.filter((value) => value.type === "tool-call");
       if (toolCalls.length === 0) return;

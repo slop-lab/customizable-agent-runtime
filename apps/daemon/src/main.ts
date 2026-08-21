@@ -96,6 +96,14 @@ async function route(request: IncomingMessage, response: ServerResponse) {
     return;
   }
 
+  const artifactContentMatch = /^\/v1\/artifacts\/([^/]+)\/content$/.exec(url.pathname);
+  if (request.method === "GET" && artifactContentMatch?.[1]) {
+    const content = runtime.readArtifact(artifactContentMatch[1]);
+    send(response, content === undefined ? 404 : 200,
+      content === undefined ? { error: "Artifact not found" } : { content });
+    return;
+  }
+
   send(response, 404, { error: "Not found" });
 }
 

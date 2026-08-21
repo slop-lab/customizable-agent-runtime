@@ -45,6 +45,7 @@ test("demo driver records every retry decision and eventual success", async () =
   const attempts = runtime.getModelAttempts(run.id);
   assert.deepEqual(attempts.map((attempt) => attempt.status), ["failed", "completed"]);
   assert.deepEqual(attempts[0].retryDecision, { retry: true, reason: "temporary", retryNumber: 1, backoffMs: 250 });
+  assert.equal(attempts[1].retryOfAttemptId, attempts[0].id);
   runtime.close();
 });
 

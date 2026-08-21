@@ -49,14 +49,48 @@ test("Google adapter projects streamed text while preserving every semantic even
 test("Google adapter aggregates streamed function arguments", async () => {
   const transport = { async *stream() {
     yield { event_type: "step.start", index: 0, step: { type: "function_call", id: "call", name: "read" } };
-    yield { event_type: "step.delta", index: 0, delta: { type: "arguments", partial_arguments: "{\"path\":" } };
-    yield { event_type: "step.delta", index: 0, delta: { type: "arguments", partial_arguments: "\"README.md\"}" } };
+    yield { event_type: "step.delta", index: 0, delta: { type: "arguments_delta", arguments: "{\"path\":" } };
+    yield { event_type: "step.delta", index: 0, delta: { type: "arguments_delta", arguments: "\"README.md\"}" } };
     yield { event_type: "interaction.completed", interaction: { status: "requires_action" } };
   } };
   const provider = new GoogleInteractionsProvider({ model: "gemini-test", endpoint: "https://example.test",
     credentialHandle: "env:KEY", transport });
   const turn = await provider.invoke(invocation().value);
   assert.deepEqual(turn.content[0], { type: "tool-call", callId: "call", toolName: "read", input: { path: "README.md" } });
+  assert.deepEqual(turn.content[1].value,
+    { type: "function_call", id: "call", name: "read", arguments: { path: "README.md" } });
+});
+
+test("Google adapter reconstructs thought signatures for stateless continuation", async () => {
+  const transport = { async *stream() {
+    yield { event_type: "step.start", index: 0, step: { type: "thought" } };
+    yield { event_type: "step.delta", index: 0, delta: { type: "thought_signature", signature: "signed" } };
+    yield { event_type: "interaction.completed", interaction: { status: "completed" } };
+  } };
+  const provider = new GoogleInteractionsProvider({ model: "gemini-test", endpoint: "https://example.test",
+    credentialHandle: "env:KEY", transport });
+  const turn = await provider.invoke(invocation().value);
+  assert.deepEqual(turn.content, [{ type: "provider-native", provider: "google.interactions",
+    value: { type: "thought", signature: "signed" } }]);
+});
+
+test("Google stateless projection links function results to their function names", async () => {
+  let body;
+  const transport = { async *stream(value) {
+    body = value;
+    yield { event_type: "interaction.completed", interaction: { status: "completed" } };
+  } };
+  const provider = new GoogleInteractionsProvider({ model: "gemini-test", endpoint: "https://example.test",
+    credentialHandle: "env:KEY", transport });
+  const trace = invocation();
+  trace.value.context.content = [
+    { type: "provider-native", provider: "google.interactions",
+      value: { type: "function_call", id: "call", name: "read", arguments: { path: "README.md" } } },
+    { type: "tool-result", callId: "call", output: "hello", isError: false },
+  ];
+  await provider.invoke(trace.value);
+  assert.deepEqual(body.input[1], { type: "function_result", name: "read", call_id: "call", is_error: false,
+    result: [{ type: "text", text: "hello" }] });
 });
 
 test("Google transport resolves credentials internally and classifies retryable HTTP errors", async () => {

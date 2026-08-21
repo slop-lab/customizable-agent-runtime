@@ -77,6 +77,10 @@ export class Runtime {
   getModelAttempts(runId: string): readonly ModelAttempt[] { return this.#repository.listModelAttempts(runId); }
   getContextProjection(id: string): ContextProjection | undefined { return this.#repository.getContextProjection(id); }
   getArtifact(id: string): ArtifactMetadata | undefined { return this.#repository.getArtifact(id); }
+  readArtifact(id: string): string | undefined {
+    const metadata = this.getArtifact(id);
+    return metadata === undefined || metadata.status === "partial" ? undefined : this.#artifactStore.read(metadata);
+  }
 
   capabilities() {
     return { apiVersion: "v1", provider: { id: this.provider.id, profile: this.provider.profile,
@@ -106,7 +110,7 @@ export class Runtime {
       await this.driver.run({
         sessionId, runId: started.run.id, signal: controller.signal,
         records: () => this.getRecords(sessionId), tools: () => this.tools.describe(),
-        invokeModel: () => this.#invokeModel(started.run.id, sessionId, controller.signal),
+        invokeModel: (options) => this.#invokeModel(started.run.id, sessionId, controller.signal, options),
         recordRetryDecision: (attemptId, decision) => this.#recordRetryDecision(attemptId, decision),
         append: (content) => this.#appendNormalized(sessionId, started.run.id, content),
         dispatch: (call) => this.#dispatchTool(sessionId, started.run.id, call, controller.signal),
@@ -140,7 +144,8 @@ export class Runtime {
     });
   }
 
-  async #invokeModel(runId: string, sessionId: string, signal: AbortSignal): Promise<ModelAttemptResult> {
+  async #invokeModel(runId: string, sessionId: string, signal: AbortSignal,
+    options: { readonly retryOfAttemptId?: string } = {}): Promise<ModelAttemptResult> {
     signal.throwIfAborted();
     const existing = this.#repository.listModelAttempts(runId);
     const attemptNumber = existing.length + 1;
@@ -156,6 +161,7 @@ export class Runtime {
       this.#repository.createOperation(operation, this.#event("operation.started", operation));
       this.#repository.createModelAttempt({ id: attemptId, runId, operationId: operation.id, attemptNumber,
         ...(existing.at(-1) ? { previousAttemptId: existing.at(-1)!.id } : {}), contextProjectionId: context.id,
+        ...(options.retryOfAttemptId === undefined ? {} : { retryOfAttemptId: options.retryOfAttemptId }),
         requestArtifactId: requestWriter.metadata.id, eventArtifactId: eventWriter.metadata.id,
         providerProfile: this.provider.profile, capabilities: this.provider.capabilities,
         status: "running", startedAt: now });

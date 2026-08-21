@@ -113,7 +113,7 @@ export interface DriverContext {
   readonly signal: AbortSignal;
   records(): readonly RecordEntry[];
   tools(): readonly ToolDescription[];
-  invokeModel(): Promise<ModelAttemptResult>;
+  invokeModel(options?: { readonly retryOfAttemptId?: string }): Promise<ModelAttemptResult>;
   recordRetryDecision(attemptId: string, decision: JsonObject): Promise<void>;
   append(content: NormalizedContent): Promise<void>;
   dispatch(call: Extract<NormalizedContent, { type: "tool-call" }>): Promise<ToolResult>;

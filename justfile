@@ -17,6 +17,9 @@ build:
 
 verify: check test build
 
+test-live-google: build
+    CAR_PROVIDER=google-ai-studio node scripts/google-live-smoke.mjs
+
 dev:
     pnpm dev
 
