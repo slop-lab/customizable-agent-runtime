@@ -14,6 +14,10 @@ The equivalent direct commands are `pnpm install --frozen-lockfile`, `pnpm
 check`, `pnpm test`, and `pnpm build`. Dependency and toolchain updates must be
 explicit and reviewed.
 
+The daemon stores its SQLite state in `.car/runtime.sqlite` by default. Set
+`CAR_DATA_DIR` to use a separate data directory for tests or parallel manual
+experiments. Only one daemon writer may open a data directory at a time.
+
 ## DIM workflow
 
 CAR uses DIM as development infrastructure, not as part of the runtime kernel.

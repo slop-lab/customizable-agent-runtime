@@ -47,6 +47,18 @@ test("committed outbox events publish after a restart", async () => {
   rmSync(directory, { recursive: true, force: true });
 });
 
+test("outbox retains the same event for retry when publication fails", async () => {
+  const runtime = new Runtime(provider, new ToolDispatcher([]));
+  const session = await runtime.createSession("retry-event");
+  let failedId;
+  assert.throws(() => runtime.subscribe((event) => { failedId = event.id; throw new Error("consumer failed"); }));
+  const retried = [];
+  runtime.subscribe((event) => retried.push(event));
+  assert.equal(retried.find((event) => event.type === "session.created").id, failedId);
+  assert.equal(retried.find((event) => event.type === "session.created").data.id, session.id);
+  runtime.close();
+});
+
 test("startup abandons stale running operations without changing terminal operations", async () => {
   const directory = mkdtempSync(join(tmpdir(), "car-recovery-"));
   const path = join(directory, "runtime.sqlite");

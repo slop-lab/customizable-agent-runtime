@@ -10,7 +10,7 @@
     "clean": "tsc -b tsconfig.build.json --clean",
     "dev": "pnpm run build && node --enable-source-maps dist/main.js",
     "start": "node --enable-source-maps dist/main.js",
-    "test": "node --test"
+    "test": "pnpm run build && node --test test/*.test.js"
   },
   "dependencies": {
     "@car/core": "workspace:*",

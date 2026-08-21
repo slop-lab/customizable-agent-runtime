@@ -5,5 +5,6 @@ export * from "./persistence.js";
 export * from "./runtime.js";
 export * from "./storage.js";
 export * from "./system.js";
+export * from "./trace.js";
 export * from "./tool-dispatcher.js";
 export * from "./worker.js";

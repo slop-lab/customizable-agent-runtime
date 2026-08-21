@@ -9,7 +9,12 @@ interface WorkerRequestBase {
 
 export type WorkerRequest =
   | (WorkerRequestBase & { readonly type: "readFile"; readonly path: string })
-  | (WorkerRequestBase & { readonly type: "shell"; readonly command: string });
+  | (WorkerRequestBase & { readonly type: "list"; readonly path: string })
+  | (WorkerRequestBase & { readonly type: "search"; readonly query: string; readonly path?: string })
+  | (WorkerRequestBase & { readonly type: "writeFile"; readonly path: string; readonly content: string })
+  | (WorkerRequestBase & { readonly type: "applyPatch"; readonly patch: string })
+  | (WorkerRequestBase & { readonly type: "shell"; readonly command: string })
+  | (WorkerRequestBase & { readonly type: "gitStatus" });
 
 export type WorkerResponse =
   | { readonly ok: true; readonly output: string; readonly metadata?: Readonly<Record<string, unknown>> }

@@ -1,5 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { closeSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { RuntimeError } from "./errors.js";
 
 const schema = `
@@ -64,19 +66,14 @@ const schema = `
 
 export class SerializedWriter {
   #tail: Promise<void> = Promise.resolve();
-  #active = false;
+  readonly #context = new AsyncLocalStorage<boolean>();
 
   run<T>(command: () => T | Promise<T>): Promise<T> {
+    if (this.#context.getStore()) {
+      return Promise.reject(new RuntimeError("conflict", "Nested writer commands are not allowed"));
+    }
     const execute = async () => {
-      if (this.#active) {
-        throw new RuntimeError("conflict", "Nested writer commands are not allowed");
-      }
-      this.#active = true;
-      try {
-        return await command();
-      } finally {
-        this.#active = false;
-      }
+      return this.#context.run(true, command);
     };
     const result = this.#tail.then(execute, execute);
     this.#tail = result.then(() => undefined, () => undefined);
@@ -94,16 +91,24 @@ export class KernelDatabase {
   readonly writer = new SerializedWriter();
   readonly #owner: string;
   readonly #hasWriterLock: boolean;
+  readonly #lockPath: string | undefined;
+  #lockFd: number | undefined;
   #closed = false;
 
   constructor(path: string, options: KernelDatabaseOptions = {}) {
     this.#owner = options.owner ?? randomUUID();
     this.#hasWriterLock = options.acquireWriterLock ?? path !== ":memory:";
-    this.db = new DatabaseSync(path);
-    this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 1000;");
-    if (path !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL;");
-    this.migrate();
+    this.#lockPath = this.#hasWriterLock ? `${path}.writer.lock` : undefined;
     if (this.#hasWriterLock) this.acquireWriterLock();
+    try {
+      this.db = new DatabaseSync(path);
+      this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 1000;");
+      if (path !== ":memory:") this.db.exec("PRAGMA journal_mode = WAL;");
+      this.migrate();
+    } catch (error) {
+      this.releaseWriterLock();
+      throw error;
+    }
   }
 
   migrate(): void {
@@ -124,21 +129,53 @@ export class KernelDatabase {
 
   close(): void {
     if (this.#closed) return;
-    if (this.#hasWriterLock) {
-      this.db.prepare("DELETE FROM writer_lock WHERE singleton = 1 AND owner = ?").run(this.#owner);
-    }
     this.db.close();
+    this.releaseWriterLock();
     this.#closed = true;
   }
 
   private acquireWriterLock(): void {
-    try {
-      this.db.prepare("INSERT INTO writer_lock(singleton, owner) VALUES (1, ?)").run(this.#owner);
-    } catch (error) {
-      this.db.close();
-      throw new RuntimeError("conflict", "The database already has an active writer", {
-        cause: error instanceof Error ? error.message : String(error),
-      });
+    const path = this.#lockPath!;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const fd = openSync(path, "wx", 0o600);
+        writeFileSync(fd, JSON.stringify({ owner: this.#owner, pid: process.pid }));
+        this.#lockFd = fd;
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        const existing = readLock(path);
+        if (existing && isProcessAlive(existing.pid)) {
+          throw new RuntimeError("conflict", "The database already has an active writer", { pid: existing.pid });
+        }
+        try { unlinkSync(path); } catch (unlinkError) {
+          if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError;
+        }
+      }
+    }
+    throw new RuntimeError("conflict", "Could not acquire the database writer lock");
+  }
+
+  private releaseWriterLock(): void {
+    if (this.#lockFd !== undefined) { closeSync(this.#lockFd); this.#lockFd = undefined; }
+    if (!this.#lockPath) return;
+    const existing = readLock(this.#lockPath);
+    if (existing?.owner !== this.#owner) return;
+    try { unlinkSync(this.#lockPath); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
   }
+}
+
+interface LockData { readonly owner: string; readonly pid: number }
+function readLock(path: string): LockData | undefined {
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8")) as Partial<LockData>;
+    return typeof value.owner === "string" && typeof value.pid === "number"
+      ? { owner: value.owner, pid: value.pid } : undefined;
+  } catch { return undefined; }
+}
+function isProcessAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; }
+  catch (error) { return (error as NodeJS.ErrnoException).code === "EPERM"; }
 }

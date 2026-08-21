@@ -36,11 +36,11 @@ and is not a Git branch. A run is one driver execution. An operation is a
 cancellable unit of work within or beside a run. A record is immutable history,
 and an artifact stores large or binary content outside a record.
 
-The spike implements sessions, runs, records, events, model invocation, and
-tool dispatch in memory. SQLite persistence, branching, artifacts, suspension,
-and module state are planned kernel capabilities, not claims of completed
-functionality. The canonical remote protocol will be WebSocket JSON-RPC 2.0;
-the current small HTTP endpoint is disposable spike code.
+The durable spike implements SQLite-backed sessions, runs, operations, records,
+command receipts and an event outbox, plus a typed development worker for read
+and shell execution. Branching, artifacts, suspension, and module state remain
+planned kernel capabilities. The canonical remote protocol will be WebSocket
+JSON-RPC 2.0; the current small HTTP endpoint is disposable spike code.
 
 ## Provider boundary
 

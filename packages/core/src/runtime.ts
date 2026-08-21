@@ -4,6 +4,7 @@ import { RuntimeError } from "./errors.js";
 import { RuntimeRepository } from "./persistence.js";
 import { KernelDatabase } from "./storage.js";
 import { defaultRuntimeSystem, type RuntimeSystem } from "./system.js";
+import { defaultTraceRedactor, type TraceRedactor } from "./trace.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
 import type { WorkspaceHandle } from "./worker.js";
 
@@ -12,6 +13,7 @@ export interface RuntimeOptions {
   readonly database?: KernelDatabase;
   readonly workspace?: WorkspaceHandle;
   readonly toolTimeoutMs?: number;
+  readonly redactor?: TraceRedactor;
 }
 
 export class Runtime {
@@ -22,6 +24,7 @@ export class Runtime {
   readonly #repository: RuntimeRepository;
   readonly #workspace: WorkspaceHandle;
   readonly #toolTimeoutMs: number;
+  readonly #redactor: TraceRedactor;
 
   constructor(private readonly provider: Provider, private readonly tools: ToolDispatcher,
     options: RuntimeOptions | RuntimeSystem = {}) {
@@ -31,6 +34,7 @@ export class Runtime {
     this.#repository = new RuntimeRepository(this.#database);
     this.#workspace = normalized.workspace ?? "default" as WorkspaceHandle;
     this.#toolTimeoutMs = normalized.toolTimeoutMs ?? 30_000;
+    this.#redactor = normalized.redactor ?? defaultTraceRedactor;
     this.#repository.recoverAbandoned(this.#system.clock.now(), (operation) =>
       this.#event("operation.recovered", { operationId: operation.id, runId: operation.runId }));
   }
@@ -57,7 +61,9 @@ export class Runtime {
     tools: this.tools.describe() } as const; }
 
   subscribe(listener: (event: RuntimeEvent) => void): () => void {
-    this.#listeners.add(listener); this.#publishPending();
+    this.#listeners.add(listener);
+    try { this.#publishPending(); }
+    catch (error) { this.#listeners.delete(listener); throw error; }
     return () => this.#listeners.delete(listener);
   }
 
@@ -117,7 +123,7 @@ export class Runtime {
         sessionId, runId, operationId: operation.id, workspace: this.#workspace,
         deadline: new Date(Date.parse(this.#system.clock.now()) + this.#toolTimeoutMs).toISOString(), signal,
       });
-      await this.#finishTool(operation, "completed", result);
+      await this.#finishTool(operation, "completed", this.#redactor.redact(result));
       await this.#append(sessionId, runId, "tool-result", { callId: content.callId, ...result });
     } catch (error) {
       const cancelled = signal.aborted;
@@ -148,7 +154,8 @@ export class Runtime {
   }
 
   #record(sessionId: string, runId: string, kind: RecordKind, data: unknown): RecordEntry {
-    return { id: this.#system.ids.next(), sessionId, runId, kind, data, createdAt: this.#system.clock.now() };
+    return { id: this.#system.ids.next(), sessionId, runId, kind,
+      data: this.#redactor.redact(data), createdAt: this.#system.clock.now() };
   }
 
   async #finish(started: Run, operationId: string, status: Run["status"], error?: string): Promise<Run> {

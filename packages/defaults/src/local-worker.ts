@@ -36,6 +36,7 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
         if (Buffer.byteLength(output) > this.#maxOutputBytes) return failure("output-limit", "File exceeds worker output limit");
         return { ok: true, output };
       }
+      if (request.type !== "shell") return failure("worker-failed", `Unsupported development worker request: ${request.type}`);
       const cwd = await this.#resolve(".", request.cwd);
       const result = await execFileAsync("/bin/sh", ["-lc", request.command], {
         cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxOutputBytes,

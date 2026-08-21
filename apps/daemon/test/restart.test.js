@@ -1,0 +1,64 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
+import { createServer } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+
+test("daemon recovers persisted session history after a process restart", async () => {
+  const dataDirectory = mkdtempSync(join(tmpdir(), "car-daemon-"));
+  const port = await availablePort();
+  let daemon = await startDaemon(dataDirectory, port);
+  const sessionResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions`, { method: "POST" });
+  assert.equal(sessionResponse.status, 201);
+  const session = await sessionResponse.json();
+  const runResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions/${session.id}/runs`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ input: "persist me" }),
+  });
+  assert.equal(runResponse.status, 201);
+  assert.equal((await runResponse.json()).status, "completed");
+  await stopDaemon(daemon, "SIGKILL");
+
+  daemon = await startDaemon(dataDirectory, port);
+  const recordsResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions/${session.id}/records`);
+  assert.equal(recordsResponse.status, 200);
+  assert.deepEqual((await recordsResponse.json()).map((record) => record.kind), ["user", "assistant"]);
+  await stopDaemon(daemon);
+  rmSync(dataDirectory, { recursive: true, force: true });
+});
+
+async function availablePort() {
+  const server = createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  const port = typeof address === "object" && address ? address.port : 0;
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return port;
+}
+
+async function startDaemon(dataDirectory, port) {
+  const child = spawn(process.execPath, ["--enable-source-maps", "dist/main.js"], {
+    cwd: new URL("..", import.meta.url),
+    env: { ...process.env, CAR_DATA_DIR: dataDirectory, CAR_PORT: String(port) },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => { stderr += chunk; });
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`daemon start timeout: ${stderr}`)), 5_000);
+    child.stdout.on("data", (chunk) => {
+      if (String(chunk).includes("CAR daemon listening")) { clearTimeout(timeout); resolve(); }
+    });
+    child.once("exit", (code) => { clearTimeout(timeout); reject(new Error(`daemon exited ${code}: ${stderr}`)); });
+  });
+  return child;
+}
+
+async function stopDaemon(child, signal = "SIGTERM") {
+  child.kill(signal);
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("daemon stop timeout")); }, 5_000);
+    child.once("exit", () => { clearTimeout(timeout); resolve(); });
+  });
+}

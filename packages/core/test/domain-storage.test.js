@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import test from "node:test";
 import {
   assertOperationTransition,
@@ -26,6 +28,14 @@ test("serialized writer preserves command order", async () => {
     writer.run(() => { observed.push(2); }),
   ]);
   assert.deepEqual(observed, [1, 2]);
+});
+
+test("serialized writer rejects nested commands instead of deadlocking", async () => {
+  const writer = new SerializedWriter();
+  await assert.rejects(
+    () => writer.run(() => writer.run(() => "nested")),
+    (error) => error instanceof RuntimeError && error.code === "conflict",
+  );
 });
 
 test("file database rejects a second active writer and permits it after close", () => {
@@ -54,4 +64,22 @@ test("schema migration is transactional", () => {
     0,
   );
   database.close();
+});
+
+test("writer lock is recovered after an ungraceful process exit", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "car-crash-lock-"));
+  const path = join(directory, "runtime.sqlite");
+  const moduleUrl = pathToFileURL(join(process.cwd(), "dist/index.js")).href;
+  const child = spawn(process.execPath, ["--input-type=module", "-e",
+    `import { KernelDatabase } from ${JSON.stringify(moduleUrl)}; new KernelDatabase(${JSON.stringify(path)}); console.log("ready"); setInterval(() => {}, 1000);`],
+    { stdio: ["ignore", "pipe", "inherit"] });
+  await new Promise((resolve, reject) => {
+    child.stdout.once("data", resolve);
+    child.once("exit", (code) => reject(new Error(`lock holder exited early: ${code}`)));
+  });
+  child.kill("SIGKILL");
+  await new Promise((resolve) => child.once("exit", resolve));
+  const recovered = new KernelDatabase(path);
+  recovered.close();
+  rmSync(directory, { recursive: true, force: true });
 });

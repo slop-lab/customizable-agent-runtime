@@ -45,10 +45,12 @@ curl http://127.0.0.1:4317/v1/capabilities
 curl -X POST http://127.0.0.1:4317/v1/sessions
 ```
 
-The current implementation is a deliberately small in-memory architecture
-spike. It proves the package boundaries, a replaceable provider, a unified tool
-dispatcher, stable IDs, records, and structured events. It does not yet claim
-durable history or production readiness.
+The current implementation is a durable kernel spike. It persists sessions,
+runs, operations, records, command receipts, and an event outbox in SQLite;
+recovers abandoned operations after restart; and routes default read and shell
+tools through a typed workspace worker. The fake provider remains the only
+provider, and the HTTP endpoint remains disposable pending the canonical
+WebSocket JSON-RPC contract. It does not claim production readiness.
 
 ## Developing with DIM
 
