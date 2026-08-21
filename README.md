@@ -71,6 +71,25 @@ Operators can inspect a run through `GET /v1/runs/{id}/operations`,
 `GET /v1/artifacts/{id}/content` returns the persisted, redacted request or
 semantic-event stream for local development inspection.
 
+### Interactive agent test
+
+With the same `.env`, start a multi-turn interactive session:
+
+```bash
+just chat
+```
+
+Each prompt runs against the same session, so subsequent turns receive its
+persisted context. The terminal shows assistant replies, tool calls, run IDs,
+and failures. Use `/id` to print the session ID and `/exit` to quit. Complete
+records, attempts, normalized contexts, and provider artifacts remain under
+`.car/` and are available through the daemon inspection endpoints.
+
+The daemon remains available through `just start`, but an external ingress is
+not required for this local inspection workflow. If a UI is added later, DIM
+can expose its container port with `dim external-url request --ingress NAME`;
+the ingress itself must first be configured by the DIM host administrator.
+
 ## Developing with DIM
 
 The repository follows DIM's single-repository Project contract. Register the
