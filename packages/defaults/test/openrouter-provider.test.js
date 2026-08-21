@@ -22,7 +22,9 @@ test("OpenRouter is selected when its key is present and defaults to the verifie
 test("OpenRouter adapter projects text, tool calls, usage, and original message", async () => {
   const response = { id: "response", choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: null,
     tool_calls: [{ id: "call", type: "function", function: { name: "read", arguments: "{\"path\":\"README.md\"}" } }] } }],
-    usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 } };
+    usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12, cost: 0.004,
+      prompt_tokens_details: { cached_tokens: 3, cache_write_tokens: 1 },
+      completion_tokens_details: { reasoning_tokens: 1 } } };
   const transport = { async send() { return response; } };
   const provider = new OpenRouterChatProvider({ model: "google/gemma-test", endpoint: "https://openrouter.test",
     credentialHandle: "env:KEY", transport });
@@ -32,6 +34,8 @@ test("OpenRouter adapter projects text, tool calls, usage, and original message"
   assert.deepEqual(turn.content[1], { type: "provider-native", provider: "openrouter.chat",
     value: response.choices[0].message });
   assert.deepEqual(turn.usage, response.usage);
+  assert.deepEqual(turn.normalizedUsage, { version: 1, inputTokens: 10, outputTokens: 2,
+    reasoningTokens: 1, cacheReadTokens: 3, cacheWriteTokens: 1, totalTokens: 12, costUsd: 0.004 });
   assert.equal(trace.events[0].payload, response);
 });
 

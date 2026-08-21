@@ -1,5 +1,5 @@
 import type {
-  JsonObject, ModelInvocationRequest, ModelProvider, NormalizedContent, ProviderCapabilitiesV1,
+  JsonObject, ModelInvocationRequest, ModelProvider, NormalizedContent, NormalizedUsageV1, ProviderCapabilitiesV1,
   ProviderProfile, ProviderTurn,
 } from "@car/core";
 import { ProviderInvocationError } from "@car/core";
@@ -82,10 +82,22 @@ export class OpenRouterChatProvider implements ModelProvider {
         callId: call.id, toolName: fn.name, input: parseArguments(fn.arguments) });
     }
     content.push({ type: "provider-native", provider: "openrouter.chat", value: message });
+    const usage = asObjectOrUndefined(response.usage);
     return { content, ...(typeof choice.finish_reason === "string" ? { finishReason: choice.finish_reason } : {}),
-      ...(asObjectOrUndefined(response.usage) ? { usage: asObject(response.usage) } : {}),
+      ...(usage ? { usage, normalizedUsage: normalizeOpenRouterUsage(usage) } : {}),
       ...(typeof response.id === "string" ? { providerResponseId: response.id } : {}) };
   }
+}
+
+export function normalizeOpenRouterUsage(usage: Readonly<Record<string, unknown>>): NormalizedUsageV1 {
+  const promptDetails = asObject(usage.prompt_tokens_details);
+  const completionDetails = asObject(usage.completion_tokens_details);
+  return compactUsage({ version: 1,
+    inputTokens: numberValue(usage.prompt_tokens), outputTokens: numberValue(usage.completion_tokens),
+    reasoningTokens: numberValue(completionDetails.reasoning_tokens),
+    cacheReadTokens: numberValue(promptDetails.cached_tokens),
+    cacheWriteTokens: numberValue(promptDetails.cache_write_tokens),
+    totalTokens: numberValue(usage.total_tokens), costUsd: numberValue(usage.cost) });
 }
 
 function projectMessages(content: readonly NormalizedContent[]): unknown[] {
@@ -122,4 +134,10 @@ function asObject(value: unknown): Record<string, unknown> {
 }
 function asObjectOrUndefined(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
+}
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+function compactUsage(value: Readonly<Record<string, number | undefined>> & { readonly version: 1 }): NormalizedUsageV1 {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as unknown as NormalizedUsageV1;
 }

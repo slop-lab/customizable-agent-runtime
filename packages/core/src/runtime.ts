@@ -19,6 +19,7 @@ import { defaultRuntimeSystem, type RuntimeSystem } from "./system.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
 import { defaultTraceRedactor, type TraceRedactor } from "./trace.js";
 import type { WorkspaceHandle } from "./worker.js";
+import { aggregateUsage, type UsageFilter, type UsageReport } from "./usage.js";
 
 export interface RuntimeOptions {
   readonly system?: RuntimeSystem;
@@ -84,6 +85,19 @@ export class Runtime {
   getRecords(sessionId: string): readonly RecordEntry[] { return this.#repository.getRecords(sessionId); }
   getOperations(runId: string): readonly Operation[] { return this.#repository.listOperations(runId); }
   getModelAttempts(runId: string): readonly ModelAttempt[] { return this.#repository.listModelAttempts(runId); }
+  usage(filter: UsageFilter = {}): UsageReport {
+    if (filter.sessionId !== undefined && !this.getSession(filter.sessionId)) {
+      throw new RuntimeError("not-found", `Unknown session: ${filter.sessionId}`);
+    }
+    if (filter.runId !== undefined) {
+      const run = this.getRun(filter.runId);
+      if (!run) throw new RuntimeError("not-found", `Unknown run: ${filter.runId}`);
+      if (filter.sessionId !== undefined && run.sessionId !== filter.sessionId) {
+        throw new RuntimeError("validation", `Run ${filter.runId} does not belong to session ${filter.sessionId}`);
+      }
+    }
+    return aggregateUsage(this.#repository.listUsageAttempts(filter), filter);
+  }
   getContextProjection(id: string): ContextProjection | undefined { return this.#repository.getContextProjection(id); }
   getArtifact(id: string): ArtifactMetadata | undefined { return this.#repository.getArtifact(id); }
   readArtifact(id: string): string | undefined {
@@ -196,6 +210,7 @@ export class Runtime {
         this.#repository.finishModelAttempt(attemptId, "completed", { endedAt,
           ...(turn.finishReason === undefined ? {} : { finishReason: turn.finishReason }),
           ...(turn.usage === undefined ? {} : { usage: turn.usage }),
+          ...(turn.normalizedUsage === undefined ? {} : { normalizedUsage: turn.normalizedUsage }),
           ...(turn.providerResponseId === undefined ? {} : { providerResponseId: turn.providerResponseId }) });
         this.#repository.finishOperation(operation.id, "completed", endedAt,
           this.#event("operation.finished", { ...operation, status: "completed", endedAt }), turn);

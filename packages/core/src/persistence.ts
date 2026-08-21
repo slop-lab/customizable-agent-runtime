@@ -7,6 +7,7 @@ import type {
 import type { KernelDatabase } from "./storage.js";
 import type { ArtifactMetadata } from "./artifacts.js";
 import type { ContextProjection, ModelAttempt, ModelAttemptStatus } from "./agent-contracts.js";
+import type { UsageAttempt, UsageFilter } from "./usage.js";
 
 type Row = Readonly<Record<string, unknown>>;
 export interface PendingEvent extends RuntimeEvent { readonly sequence: number }
@@ -226,15 +227,17 @@ export class RuntimeRepository {
 
   finishModelAttempt(id: string, status: ModelAttemptStatus, fields: {
     readonly endedAt: string; readonly finishReason?: string; readonly usage?: unknown;
+    readonly normalizedUsage?: unknown;
     readonly providerResponseId?: string; readonly error?: unknown; readonly retryDecision?: unknown;
     readonly requestArtifactId?: string; readonly eventArtifactId?: string;
   }): void {
-    this.database.db.prepare(`UPDATE model_attempts SET status=?, ended_at=?, finish_reason=?, usage_json=?,
+    this.database.db.prepare(`UPDATE model_attempts SET status=?, ended_at=?, finish_reason=?, usage_json=?, normalized_usage_json=?,
       provider_response_id=?, error_json=?, retry_decision_json=?,
       request_artifact_id=COALESCE(?, request_artifact_id), event_artifact_id=COALESCE(?, event_artifact_id)
       WHERE id=?`)
       .run(status, fields.endedAt, fields.finishReason ?? null,
-        fields.usage === undefined ? null : JSON.stringify(fields.usage), fields.providerResponseId ?? null,
+        fields.usage === undefined ? null : JSON.stringify(fields.usage),
+        fields.normalizedUsage === undefined ? null : JSON.stringify(fields.normalizedUsage), fields.providerResponseId ?? null,
         fields.error === undefined ? null : JSON.stringify(fields.error),
         fields.retryDecision === undefined ? null : JSON.stringify(fields.retryDecision),
         fields.requestArtifactId ?? null, fields.eventArtifactId ?? null, id);
@@ -243,6 +246,18 @@ export class RuntimeRepository {
   listModelAttempts(runId: string): readonly ModelAttempt[] {
     return (this.database.db.prepare("SELECT * FROM model_attempts WHERE run_id = ? ORDER BY attempt_number")
       .all(runId) as Row[]).map(attemptFromRow);
+  }
+
+  listUsageAttempts(filter: UsageFilter = {}): readonly UsageAttempt[] {
+    const conditions: string[] = [];
+    const parameters: string[] = [];
+    if (filter.sessionId !== undefined) { conditions.push("r.session_id = ?"); parameters.push(filter.sessionId); }
+    if (filter.runId !== undefined) { conditions.push("ma.run_id = ?"); parameters.push(filter.runId); }
+    const where = conditions.length === 0 ? "" : `WHERE ${conditions.join(" AND ")}`;
+    const rows = this.database.db.prepare(`SELECT ma.*, r.session_id usage_session_id
+      FROM model_attempts ma JOIN runs r ON r.id = ma.run_id ${where}
+      ORDER BY ma.started_at, ma.run_id, ma.attempt_number`).all(...parameters) as Row[];
+    return rows.map((row) => ({ sessionId: String(row.usage_session_id), attempt: attemptFromRow(row) }));
   }
 
   setAttemptRetryDecision(id: string, decision: unknown): void {
@@ -320,6 +335,7 @@ function attemptFromRow(row: Row): ModelAttempt {
     ...(row.ended_at === null ? {} : { endedAt: String(row.ended_at) }),
     ...(row.finish_reason === null ? {} : { finishReason: String(row.finish_reason) }),
     ...(row.usage_json === null ? {} : { usage: JSON.parse(String(row.usage_json)) as NonNullable<ModelAttempt["usage"]> }),
+    ...(row.normalized_usage_json === null ? {} : { normalizedUsage: JSON.parse(String(row.normalized_usage_json)) as NonNullable<ModelAttempt["normalizedUsage"]> }),
     ...(row.provider_response_id === null ? {} : { providerResponseId: String(row.provider_response_id) }),
     ...(row.error_json === null ? {} : { error: JSON.parse(String(row.error_json)) as NonNullable<ModelAttempt["error"]> }),
     ...(row.retry_decision_json === null ? {} : { retryDecision: JSON.parse(String(row.retry_decision_json)) as NonNullable<ModelAttempt["retryDecision"]> }) };

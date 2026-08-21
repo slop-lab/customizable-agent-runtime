@@ -32,11 +32,13 @@ test("attempts retain context, artifacts, profile, usage, and retry decisions", 
   repository.createModelAttempt({ id: "attempt", runId: "run", operationId: "operation", attemptNumber: 1,
     contextProjectionId: "context", providerProfile: profile, capabilities, status: "running", startedAt: "start" });
   repository.finishModelAttempt("attempt", "failed", { endedAt: "end", error: { code: "temporary" },
-    retryDecision: { retry: true, reason: "temporary" }, usage: { totalTokens: 3 } });
+    retryDecision: { retry: true, reason: "temporary" }, usage: { total_tokens: 3 },
+    normalizedUsage: { version: 1, totalTokens: 3 } });
   const [attempt] = repository.listModelAttempts("run");
   assert.equal(attempt.status, "failed");
   assert.deepEqual(attempt.error, { code: "temporary" });
   assert.deepEqual(attempt.retryDecision, { retry: true, reason: "temporary" });
-  assert.deepEqual(attempt.usage, { totalTokens: 3 });
+  assert.deepEqual(attempt.usage, { total_tokens: 3 });
+  assert.deepEqual(attempt.normalizedUsage, { version: 1, totalTokens: 3 });
   database.close();
 });

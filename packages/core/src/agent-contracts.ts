@@ -37,7 +37,19 @@ export interface ProviderTurn {
   readonly content: readonly NormalizedContent[];
   readonly finishReason?: string;
   readonly usage?: JsonObject;
+  readonly normalizedUsage?: NormalizedUsageV1;
   readonly providerResponseId?: string;
+}
+
+export interface NormalizedUsageV1 {
+  readonly version: 1;
+  readonly inputTokens?: number;
+  readonly outputTokens?: number;
+  readonly reasoningTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  readonly totalTokens?: number;
+  readonly costUsd?: number;
 }
 
 export interface ModelInvocationRequest {
@@ -102,6 +114,7 @@ export interface ModelAttempt {
   readonly endedAt?: string;
   readonly finishReason?: string;
   readonly usage?: JsonObject;
+  readonly normalizedUsage?: NormalizedUsageV1;
   readonly providerResponseId?: string;
   readonly error?: JsonObject;
   readonly retryDecision?: JsonObject;

@@ -31,7 +31,9 @@ test("Google adapter projects streamed text while preserving every semantic even
     { event_type: "step.delta", index: 0, delta: { type: "text", text: "hello " } },
     { event_type: "step.delta", index: 0, delta: { type: "text", text: "world" } },
     { event_type: "step.stop", index: 0 },
-    { event_type: "interaction.completed", interaction: { id: "response", status: "completed", usage: { total_tokens: 3 } } },
+    { event_type: "interaction.completed", interaction: { id: "response", status: "completed", usage: {
+      total_tokens: 13, total_input_tokens: 5, total_output_tokens: 3, total_thought_tokens: 4,
+      total_cached_tokens: 1 } } },
   ];
   const transport = { async *stream() { yield* semanticEvents; } };
   const provider = new GoogleInteractionsProvider({ model: "gemini-test", endpoint: "https://example.test/interactions",
@@ -42,7 +44,10 @@ test("Google adapter projects streamed text while preserving every semantic even
   assert.equal(trace.events.length, semanticEvents.length);
   assert.deepEqual(turn.content.slice(0, 1), [{ type: "text", role: "assistant", text: "hello world" }]);
   assert.equal(turn.content[1].type, "provider-native");
-  assert.deepEqual(turn.usage, { total_tokens: 3 });
+  assert.deepEqual(turn.usage, { total_tokens: 13, total_input_tokens: 5, total_output_tokens: 3,
+    total_thought_tokens: 4, total_cached_tokens: 1 });
+  assert.deepEqual(turn.normalizedUsage, { version: 1, inputTokens: 5, outputTokens: 3,
+    reasoningTokens: 4, cacheReadTokens: 1, totalTokens: 13 });
   assert.equal(turn.providerResponseId, "response");
 });
 

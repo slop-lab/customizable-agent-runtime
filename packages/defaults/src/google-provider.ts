@@ -1,5 +1,5 @@
 import type {
-  JsonObject, ModelInvocationRequest, ModelProvider, NormalizedContent, ProviderCapabilitiesV1,
+  JsonObject, ModelInvocationRequest, ModelProvider, NormalizedContent, NormalizedUsageV1, ProviderCapabilitiesV1,
   ProviderProfile, ProviderTurn,
 } from "@car/core";
 import { ProviderInvocationError } from "@car/core";
@@ -88,10 +88,17 @@ export class GoogleInteractionsProvider implements ModelProvider {
       content.push(...normalizeGoogleStep(step));
       content.push({ type: "provider-native", provider: "google.interactions", value: step });
     }
+    const usage = asObjectOrUndefined(completed?.usage);
     return { content, finishReason: stringValue(completed?.status) ?? "completed",
-      ...(asObjectOrUndefined(completed?.usage) ? { usage: asObject(completed!.usage) } : {}),
+      ...(usage ? { usage, normalizedUsage: normalizeGoogleUsage(usage) } : {}),
       ...(stringValue(completed?.id) ? { providerResponseId: stringValue(completed!.id)! } : {}) };
   }
+}
+
+export function normalizeGoogleUsage(usage: Readonly<Record<string, unknown>>): NormalizedUsageV1 {
+  return compactUsage({ version: 1, inputTokens: numberValue(usage.total_input_tokens),
+    outputTokens: numberValue(usage.total_output_tokens), reasoningTokens: numberValue(usage.total_thought_tokens),
+    cacheReadTokens: numberValue(usage.total_cached_tokens), totalTokens: numberValue(usage.total_tokens) });
 }
 
 export async function* parseSseJson(stream: ReadableStream<Uint8Array>, signal: AbortSignal): AsyncIterable<unknown> {
@@ -208,3 +215,9 @@ function asObjectOrUndefined(value: unknown): Record<string, unknown> | undefine
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : undefined;
 }
 function stringValue(value: unknown): string | undefined { return typeof value === "string" ? value : undefined; }
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+function compactUsage(value: Readonly<Record<string, number | undefined>> & { readonly version: 1 }): NormalizedUsageV1 {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as unknown as NormalizedUsageV1;
+}

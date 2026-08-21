@@ -23,6 +23,9 @@ test-live-google: build
 chat: build
     CAR_PROVIDER=openrouter node scripts/agent-chat.mjs
 
+usage *args: build
+    node scripts/usage.mjs {{args}}
+
 dev:
     pnpm dev
 

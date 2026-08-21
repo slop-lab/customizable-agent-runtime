@@ -54,7 +54,7 @@ test("file database rejects a second active writer and permits it after close", 
 
 test("schema migration is transactional", () => {
   const database = new KernelDatabase(":memory:");
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 2);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 3);
   assert.throws(() => database.transaction(() => {
     database.db.exec("CREATE TABLE should_rollback(value TEXT)");
     throw new Error("fail migration");
@@ -64,6 +64,20 @@ test("schema migration is transactional", () => {
     0,
   );
   database.close();
+});
+
+test("schema version 2 databases gain normalized provider usage", () => {
+  const directory = mkdtempSync(join(tmpdir(), "car-migration-v2-"));
+  const path = join(directory, "runtime.sqlite");
+  let database = new KernelDatabase(path);
+  database.db.exec("ALTER TABLE model_attempts DROP COLUMN normalized_usage_json; UPDATE schema_metadata SET version = 2");
+  database.close();
+  database = new KernelDatabase(path);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 3);
+  assert.equal(database.db.prepare("PRAGMA table_info(model_attempts)").all()
+    .some((column) => column.name === "normalized_usage_json"), true);
+  database.close();
+  rmSync(directory, { recursive: true, force: true });
 });
 
 test("writer lock is recovered after an ungraceful process exit", async () => {

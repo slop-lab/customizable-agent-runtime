@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createDefaultRuntime, createProviderFromEnvironment } from "@car/defaults";
+import { RuntimeError } from "@car/core";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const environmentFile = join(repositoryRoot, ".env");
@@ -20,6 +21,11 @@ const server = createServer(async (request, response) => {
   try {
     await route(request, response);
   } catch (error) {
+    if (error instanceof RuntimeError) {
+      const status = error.code === "not-found" ? 404 : error.code === "validation" ? 400
+        : error.code === "conflict" ? 409 : error.code === "cancelled" ? 409 : 500;
+      send(response, status, { error: error.message, code: error.code }); return;
+    }
     send(response, 500, { error: error instanceof Error ? error.message : String(error) });
   }
 });
@@ -33,6 +39,12 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   }
   if (request.method === "GET" && url.pathname === "/v1/capabilities") {
     send(response, 200, runtime.capabilities());
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/v1/usage") {
+    const sessionId = optionalParameter(url, "sessionId");
+    const runId = optionalParameter(url, "runId");
+    send(response, 200, runtime.usage({ ...(sessionId ? { sessionId } : {}), ...(runId ? { runId } : {}) }));
     return;
   }
   if (request.method === "POST" && url.pathname === "/v1/sessions") {
@@ -126,6 +138,13 @@ function readLimit(url: URL): number | undefined {
   if (!/^\d+$/.test(value)) return undefined;
   const parsed = Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 100 ? parsed : undefined;
+}
+
+function optionalParameter(url: URL, name: string): string | undefined {
+  const value = url.searchParams.get(name);
+  if (value === null) return undefined;
+  if (value.length === 0) throw new RuntimeError("validation", `${name} must not be empty`);
+  return value;
 }
 
 async function readJson(request: IncomingMessage): Promise<unknown> {

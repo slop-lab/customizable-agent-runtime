@@ -11,3 +11,4 @@ export * from "./system.js";
 export * from "./trace.js";
 export * from "./tool-dispatcher.js";
 export * from "./worker.js";
+export * from "./usage.js";

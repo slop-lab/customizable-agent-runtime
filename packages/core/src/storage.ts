@@ -102,6 +102,7 @@ const schema = `
     ended_at TEXT,
     finish_reason TEXT,
     usage_json TEXT,
+    normalized_usage_json TEXT,
     provider_response_id TEXT,
     error_json TEXT,
     retry_decision_json TEXT,
@@ -159,7 +160,18 @@ export class KernelDatabase {
   }
 
   migrate(): void {
-    this.transaction(() => this.db.exec(schema));
+    this.transaction(() => {
+      this.db.exec(schema);
+      const version = Number((this.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get() as
+        { version: number }).version);
+      if (version < 3) {
+        const columns = this.db.prepare("PRAGMA table_info(model_attempts)").all() as { name: string }[];
+        if (!columns.some((column) => column.name === "normalized_usage_json")) {
+          this.db.exec("ALTER TABLE model_attempts ADD COLUMN normalized_usage_json TEXT");
+        }
+        this.db.prepare("UPDATE schema_metadata SET version = 3 WHERE singleton = 1").run();
+      }
+    });
   }
 
   transaction<T>(action: () => T): T {
