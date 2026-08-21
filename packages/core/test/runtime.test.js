@@ -59,19 +59,26 @@ test("tool dispatch creates a terminal operation and result record", async () =>
 });
 
 test("cancellation leaves no post-cancel assistant continuation", async () => {
-  const provider = providerFrom(async (request) => {
-    await new Promise((_resolve, reject) => request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true }));
+  let providerStarted; let finishProvider;
+  const started = new Promise((resolve) => { providerStarted = resolve; });
+  const providerCanFinish = new Promise((resolve) => { finishProvider = resolve; });
+  const provider = providerFrom(async () => {
+    providerStarted();
+    await providerCanFinish;
     return { content: [{ type: "text", role: "assistant", text: "must not appear" }] };
   });
   const runtime = createTestRuntime(provider, [], { system: deterministicSystem() });
   const session = await runtime.createSession("create-session");
   const execution = await runtime.startRun(session.id, "cancel me");
   assert.equal(execution.run.status, "running");
+  await started;
   assert.equal(execution.cancel(), true);
+  finishProvider();
   const run = await execution.completion;
   assert.equal(run.status, "cancelled");
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user"]);
   assert.deepEqual(runtime.getModelAttempts(run.id).map((attempt) => attempt.status), ["cancelled"]);
+  assert.equal(runtime.getModelAttempts(run.id)[0].error.code, "provider.cancelled");
   runtime.close();
 });
 

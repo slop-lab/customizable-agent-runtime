@@ -151,7 +151,7 @@ export class Runtime {
         records: () => this.getRecords(sessionId), tools: () => this.tools.describe(),
         invokeModel: (options) => this.#invokeModel(started.run.id, sessionId, controller.signal, options),
         recordRetryDecision: (attemptId, decision) => this.#recordRetryDecision(attemptId, decision),
-        append: (content) => this.#appendNormalized(sessionId, started.run.id, content),
+        append: (content) => this.#appendNormalized(sessionId, started.run.id, content, controller.signal),
         dispatch: (call) => this.#dispatchTool(sessionId, started.run.id, call, controller.signal),
       });
       controller.signal.throwIfAborted();
@@ -218,6 +218,7 @@ export class Runtime {
         recordEvent: (eventType, payload) => eventWriter.appendJsonLine({ sequence: ++sequence, eventType,
           receivedAt: this.#system.clock.now(), payload: this.#redactor.redact(payload) }),
       });
+      signal.throwIfAborted();
       if (!requestRecorded) throw new Error("Provider did not record its final request");
       const endedAt = this.#system.clock.now();
       const requestArtifact = requestWriter.finalize("completed", endedAt);
@@ -236,7 +237,8 @@ export class Runtime {
     } catch (error) {
       const endedAt = this.#system.clock.now();
       const providerError = error instanceof ProviderInvocationError ? error
-        : new ProviderInvocationError("provider.internal", error instanceof Error ? error.message : String(error), false);
+        : signal.aborted ? new ProviderInvocationError("provider.cancelled", "Model invocation cancelled", false)
+          : new ProviderInvocationError("provider.internal", error instanceof Error ? error.message : String(error), false);
       const status = signal.aborted ? "cancelled" : "failed";
       const requestArtifact = requestWriter.finalize("failed", endedAt);
       const eventArtifact = eventWriter.finalize("failed", endedAt);
@@ -257,18 +259,22 @@ export class Runtime {
     await this.#database.writer.run(() => this.#repository.setAttemptRetryDecision(attemptId, decision));
   }
 
-  async #appendNormalized(sessionId: string, runId: string, content: NormalizedContent): Promise<void> {
+  async #appendNormalized(sessionId: string, runId: string, content: NormalizedContent,
+    signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (content.type === "text") {
-      await this.#append(sessionId, runId, content.role === "user" ? "user" : "assistant", { text: content.text }); return;
+      await this.#append(sessionId, runId, content.role === "user" ? "user" : "assistant", { text: content.text }, signal); return;
     }
-    if (content.type === "tool-call") { await this.#append(sessionId, runId, "tool-call", content); return; }
-    if (content.type === "tool-result") { await this.#append(sessionId, runId, "tool-result", content); return; }
-    await this.#append(sessionId, runId, "provider-native", content);
+    if (content.type === "tool-call") { await this.#append(sessionId, runId, "tool-call", content, signal); return; }
+    if (content.type === "tool-result") { await this.#append(sessionId, runId, "tool-result", content, signal); return; }
+    await this.#append(sessionId, runId, "provider-native", content, signal);
   }
 
   async #dispatchTool(sessionId: string, runId: string,
     call: Extract<NormalizedContent, { type: "tool-call" }>, signal: AbortSignal): Promise<ToolResult> {
+    signal.throwIfAborted();
     const operation = await this.#database.writer.run(() => {
+      signal.throwIfAborted();
       const now = this.#system.clock.now();
       const value: Operation = { id: this.#system.ids.next(), runId, kind: "tool", status: "running", startedAt: now };
       this.#repository.createOperation(value, this.#event("operation.started", value)); return value;
@@ -284,7 +290,7 @@ export class Runtime {
       operationFinished = true;
       signal.throwIfAborted();
       await this.#appendNormalized(sessionId, runId, { type: "tool-result", callId: call.callId,
-        output: result.output, isError: result.isError === true });
+        output: result.output, isError: result.isError === true }, signal);
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -294,7 +300,7 @@ export class Runtime {
       if (signal.aborted) throw signal.reason ?? new RuntimeError("cancelled", `Tool operation cancelled: ${operation.id}`);
       const result = { output: message, isError: true };
       await this.#appendNormalized(sessionId, runId, { type: "tool-result", callId: call.callId,
-        output: message, isError: true });
+        output: message, isError: true }, signal);
       return result;
     }
   }
@@ -310,8 +316,10 @@ export class Runtime {
     this.#publishPending();
   }
 
-  async #append(sessionId: string, runId: string, kind: RecordKind, data: unknown): Promise<void> {
+  async #append(sessionId: string, runId: string, kind: RecordKind, data: unknown,
+    signal?: AbortSignal): Promise<void> {
     await this.#database.writer.run(() => {
+      signal?.throwIfAborted();
       const record = this.#record(sessionId, runId, kind, data);
       this.#repository.appendRecord(record, this.#event("record.appended", record));
     });
