@@ -50,8 +50,9 @@ runs, operations, model attempts, normalized context projections, provider
 request/event artifacts, records, command receipts, and an event outbox in
 SQLite. It recovers abandoned work after restart and routes default read and
 shell tools through a typed workspace worker. A fake provider supports
-deterministic tests, while the Google Interactions adapter supports a real
-stateless model-tool-model loop. It does not claim production readiness.
+deterministic tests. OpenRouter Chat Completions and Google Interactions
+adapters support real model-tool-model loops. It does not claim production
+readiness.
 
 ### Google live smoke test
 
@@ -73,17 +74,25 @@ semantic-event stream for local development inspection.
 
 ### Interactive agent test
 
-With the same `.env`, start a multi-turn interactive session:
+Set `OPENROUTER_API_KEY` in `.env`, then start a multi-turn interactive session:
 
 ```bash
 just chat
 ```
 
-Each prompt runs against the same session, so subsequent turns receive its
-persisted context. The terminal shows assistant replies, tool calls, run IDs,
-and failures. Use `/id` to print the session ID and `/exit` to quit. Complete
+Enter one or more lines and use `/send` to make exactly one model run. `/show`
+previews the pending prompt and `/cancel` discards it. This explicit send step
+prevents pasted multiline prompts from becoming multiple requests. Each sent
+prompt uses the same session, so subsequent turns receive its persisted
+context. The terminal shows assistant replies, tool calls, run IDs, and
+failures. Use `/id` to print the session ID and `/exit` to quit. Complete
 records, attempts, normalized contexts, and provider artifacts remain under
 `.car/` and are available through the daemon inspection endpoints.
+
+The default model is the verified paid route `google/gemma-4-26b-a4b-it`. Set
+`CAR_OPENROUTER_MODEL=google/gemma-4-26b-a4b-it:free` to try the free route;
+free endpoint availability is not guaranteed. HTTP 429 responses are terminal
+for a run and are never automatically retried.
 
 The daemon remains available through `just start`, but an external ingress is
 not required for this local inspection workflow. If a UI is added later, DIM

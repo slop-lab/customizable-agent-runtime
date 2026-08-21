@@ -21,7 +21,7 @@ test-live-google: build
     CAR_PROVIDER=google-ai-studio node scripts/google-live-smoke.mjs
 
 chat: build
-    CAR_PROVIDER=google-ai-studio node scripts/agent-chat.mjs
+    CAR_PROVIDER=openrouter node scripts/agent-chat.mjs
 
 dev:
     pnpm dev

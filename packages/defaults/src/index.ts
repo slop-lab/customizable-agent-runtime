@@ -9,10 +9,12 @@ import {
 import { LocalDevelopmentWorker } from "./local-worker.js";
 import { EnvironmentCredentialResolver } from "./credentials.js";
 import { GoogleFetchInteractionsTransport, GoogleInteractionsProvider } from "./google-provider.js";
+import { OpenRouterChatProvider, OpenRouterFetchTransport } from "./openrouter-provider.js";
 
 export { LocalDevelopmentWorker } from "./local-worker.js";
 export * from "./credentials.js";
 export * from "./google-provider.js";
+export * from "./openrouter-provider.js";
 
 export type FakeProviderAction =
   | { readonly type: "turn"; readonly turn: ProviderTurn }
@@ -120,8 +122,16 @@ export interface DefaultRuntimeOptions {
 export function createProviderFromEnvironment(
   environment: Readonly<Record<string, string | undefined>> = process.env,
 ): ModelProvider {
-  const selected = environment.CAR_PROVIDER ?? "fake";
+  const selected = environment.CAR_PROVIDER ?? (environment.OPENROUTER_API_KEY ? "openrouter" : "fake");
   if (selected === "fake") return new FakeProvider();
+  if (selected === "openrouter") {
+    const model = environment.CAR_OPENROUTER_MODEL ?? "google/gemma-4-26b-a4b-it";
+    const endpoint = environment.CAR_OPENROUTER_ENDPOINT ?? "https://openrouter.ai/api/v1/chat/completions";
+    const credentialHandle = "env:OPENROUTER_API_KEY";
+    const credentials = new EnvironmentCredentialResolver(environment);
+    return new OpenRouterChatProvider({ model, endpoint, credentialHandle,
+      transport: new OpenRouterFetchTransport(endpoint, credentialHandle, credentials) });
+  }
   if (selected !== "google-ai-studio") throw new RuntimeError("validation", `Unknown provider: ${selected}`);
   const model = environment.CAR_GOOGLE_MODEL ?? "gemini-3.7-flash";
   const endpoint = environment.CAR_GOOGLE_ENDPOINT ?? "https://generativelanguage.googleapis.com/v1beta/interactions";

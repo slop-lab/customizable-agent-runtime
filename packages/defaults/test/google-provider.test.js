@@ -107,4 +107,8 @@ test("Google transport resolves credentials internally and classifies retryable 
     async () => new Response(JSON.stringify({ error: { message: "busy" } }), { status: 503 }));
   await assert.rejects(async () => { for await (const _value of failing.stream({}, new AbortController().signal)) {} },
     (error) => error.retryable === true && error.code === "google.http.503");
+  const limited = new GoogleFetchInteractionsTransport("https://example.test", "env:KEY", credentials,
+    async () => new Response(JSON.stringify({ error: { message: "limited" } }), { status: 429 }));
+  await assert.rejects(async () => { for await (const _value of limited.stream({}, new AbortController().signal)) {} },
+    (error) => error.retryable === false && error.code === "google.http.429");
 });

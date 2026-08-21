@@ -32,7 +32,7 @@ export class GoogleFetchInteractionsTransport implements GoogleInteractionsTrans
     }
     if (!response.ok) {
       const responseText = await response.text();
-      const retryable = response.status === 429 || response.status >= 500;
+      const retryable = response.status >= 500;
       throw new ProviderInvocationError(`google.http.${response.status}`,
         `Google Interactions request failed (${response.status}): ${safeErrorMessage(responseText)}`, retryable,
         { status: response.status });
