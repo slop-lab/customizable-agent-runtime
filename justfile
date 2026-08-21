@@ -20,8 +20,8 @@ verify: check test build
 test-live-google: build
     CAR_PROVIDER=google-ai-studio node scripts/google-live-smoke.mjs
 
-chat: build
-    CAR_PROVIDER=openrouter node scripts/agent-chat.mjs
+chat *args: build
+    CAR_PROVIDER=openrouter node scripts/agent-chat.mjs {{args}}
 
 usage *args: build
     node scripts/usage.mjs {{args}}
