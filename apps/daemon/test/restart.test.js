@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,6 +14,8 @@ test("daemon recovers persisted session history after a process restart", async 
   const sessionResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions`, { method: "POST" });
   assert.equal(sessionResponse.status, 201);
   const session = await sessionResponse.json();
+  assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/v1/plugins`)).json(), []);
+  assert.deepEqual((await (await fetch(`http://127.0.0.1:${port}/v1/capabilities`)).json()).plugins, []);
   assert.equal((await fetch(`http://127.0.0.1:${port}/v1/sessions?limit=0`)).status, 400);
   assert.equal((await fetch(`http://127.0.0.1:${port}/v1/sessions/missing/runs`)).status, 404);
   assert.equal((await fetch(`http://127.0.0.1:${port}/v1/usage?sessionId=missing`)).status, 404);
@@ -72,6 +75,38 @@ test("daemon recovers persisted session history after a process restart", async 
   rmSync(dataDirectory, { recursive: true, force: true });
 });
 
+test("daemon composes explicitly selected Gitea plugin and exposes bounded health", async () => {
+  const dataDirectory = mkdtempSync(join(tmpdir(), "car-daemon-plugin-"));
+  const daemonPort = await availablePort();
+  let observedAuthorization;
+  const gitea = createHttpServer((request, response) => {
+    observedAuthorization = request.headers.authorization;
+    assert.equal(request.url, "/api/v1/version");
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ version: "test" }));
+  });
+  await new Promise((resolve) => gitea.listen(0, "127.0.0.1", resolve));
+  const address = gitea.address();
+  assert.equal(typeof address, "object");
+  const daemon = await startDaemon(dataDirectory, daemonPort, { CAR_PLUGINS: "gitea",
+    CAR_GITEA_URL: `http://127.0.0.1:${address.port}`, CAR_GITEA_CREDENTIAL_HANDLE: "env:TEST_GITEA_TOKEN",
+    TEST_GITEA_TOKEN: "test-secret" });
+  try {
+    const capabilities = await (await fetch(`http://127.0.0.1:${daemonPort}/v1/capabilities`)).json();
+    assert.deepEqual(capabilities.plugins, [{ id: "integration.gitea", version: "1", dependencies: [] }]);
+    assert.deepEqual(capabilities.tools.filter((tool) => tool.name.startsWith("integration.gitea."))
+      .map((tool) => tool.name), ["integration.gitea.repository.get", "integration.gitea.pull.get"]);
+    const inspection = await (await fetch(`http://127.0.0.1:${daemonPort}/v1/plugins`)).json();
+    assert.deepEqual(inspection, [{ id: "integration.gitea", version: "1", dependencies: [], state: "ready",
+      health: { status: "ready" } }]);
+    assert.equal(observedAuthorization, "token test-secret");
+  } finally {
+    await stopDaemon(daemon);
+    await new Promise((resolve, reject) => gitea.close((error) => error ? reject(error) : resolve()));
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
 async function availablePort() {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -81,11 +116,11 @@ async function availablePort() {
   return port;
 }
 
-async function startDaemon(dataDirectory, port) {
+async function startDaemon(dataDirectory, port, environment = {}) {
   const child = spawn(process.execPath, ["--enable-source-maps", "dist/main.js"], {
     cwd: new URL("..", import.meta.url),
-    env: { ...process.env, CAR_PROVIDER: "fake", CAR_DATA_DIR: dataDirectory, CAR_PORT: String(port),
-      CAR_SOURCE_REVISION: "test-revision" },
+    env: { ...process.env, CAR_PROVIDER: "fake", CAR_PLUGINS: "", CAR_DATA_DIR: dataDirectory, CAR_PORT: String(port),
+      CAR_SOURCE_REVISION: "test-revision", ...environment },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";

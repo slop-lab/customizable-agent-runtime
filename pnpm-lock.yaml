@@ -23,10 +23,19 @@ importers:
       '@car/defaults':
         specifier: workspace:*
         version: link:../../packages/defaults
+      '@car/plugin-gitea':
+        specifier: workspace:*
+        version: link:../../packages/plugin-gitea
 
   packages/core: {}
 
   packages/defaults:
+    dependencies:
+      '@car/core':
+        specifier: workspace:*
+        version: link:../core
+
+  packages/plugin-gitea:
     dependencies:
       '@car/core':
         specifier: workspace:*

@@ -7,18 +7,29 @@ import {
   createDefaultRuntime,
   createProviderFromEnvironment,
   createRuntimeProvenanceFromEnvironment,
+  EnvironmentCredentialResolver,
 } from "@car/defaults";
-import { RuntimeError } from "@car/core";
+import { PluginHost, RuntimeError, type RuntimePlugin } from "@car/core";
+import { createGiteaPlugin, GiteaFetchTransport } from "@car/plugin-gitea";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const environmentFile = join(repositoryRoot, ".env");
 if (existsSync(environmentFile)) process.loadEnvFile(environmentFile);
 const dataDirectory = process.env.CAR_DATA_DIR ?? join(repositoryRoot, ".car");
 mkdirSync(dataDirectory, { recursive: true });
-const runtime = createDefaultRuntime({ databasePath: join(dataDirectory, "runtime.sqlite"),
-  artifactRoot: join(dataDirectory, "artifacts"), workspaceRoot: repositoryRoot,
-  workerBackend: readWorkerBackend(process.env.CAR_WORKER_BACKEND),
-  provider: createProviderFromEnvironment(), provenance: createRuntimeProvenanceFromEnvironment() });
+const workerBackend = readWorkerBackend(process.env.CAR_WORKER_BACKEND);
+const provider = createProviderFromEnvironment();
+const provenance = createRuntimeProvenanceFromEnvironment();
+const pluginHost = await PluginHost.initialize(createPluginsFromEnvironment());
+let runtime: ReturnType<typeof createDefaultRuntime>;
+try {
+  runtime = createDefaultRuntime({ databasePath: join(dataDirectory, "runtime.sqlite"),
+    artifactRoot: join(dataDirectory, "artifacts"), workspaceRoot: repositoryRoot,
+    workerBackend, provider, provenance, pluginHost });
+} catch (error) {
+  pluginHost.close();
+  throw error;
+}
 const host = process.env.CAR_HOST ?? "127.0.0.1";
 const port = Number.parseInt(process.env.CAR_PORT ?? "4317", 10);
 
@@ -26,6 +37,26 @@ function readWorkerBackend(value: string | undefined): "local" | "isolated-proce
   if (value === undefined || value === "local") return "local";
   if (value === "isolated-process") return value;
   throw new RuntimeError("validation", `Unknown worker backend: ${value}`);
+}
+
+function createPluginsFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): readonly RuntimePlugin[] {
+  const selected = (environment.CAR_PLUGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
+  return selected.map((name) => {
+    if (name !== "gitea") throw new RuntimeError("validation", `Unknown plugin: ${name}`);
+    const baseUrl = requiredEnvironment(environment, "CAR_GITEA_URL");
+    const credentialHandle = environment.CAR_GITEA_CREDENTIAL_HANDLE ?? "env:DIM_GIT_TOKEN";
+    const transport = new GiteaFetchTransport(baseUrl, credentialHandle,
+      new EnvironmentCredentialResolver(environment));
+    return createGiteaPlugin({ baseUrl, credentialHandle, transport });
+  });
+}
+
+function requiredEnvironment(environment: Readonly<Record<string, string | undefined>>, name: string): string {
+  const value = environment[name];
+  if (!value) throw new RuntimeError("validation", `Required environment variable is not set: ${name}`);
+  return value;
 }
 
 const server = createServer(async (request, response) => {
@@ -50,6 +81,10 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   }
   if (request.method === "GET" && url.pathname === "/v1/capabilities") {
     send(response, 200, runtime.capabilities());
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/v1/plugins") {
+    send(response, 200, await pluginHost.inspect());
     return;
   }
   if (request.method === "GET" && url.pathname === "/v1/usage") {

@@ -8,6 +8,7 @@
   },
   "references": [
     { "path": "../../packages/core/tsconfig.build.json" },
-    { "path": "../../packages/defaults/tsconfig.build.json" }
+    { "path": "../../packages/defaults/tsconfig.build.json" },
+    { "path": "../../packages/plugin-gitea/tsconfig.build.json" }
   ]
 }
