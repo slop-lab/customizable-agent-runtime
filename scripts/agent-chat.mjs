@@ -3,7 +3,8 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { createDefaultRuntime, createProviderFromEnvironment } from "../packages/defaults/dist/index.js";
+import { createDefaultRuntime, createProviderFromEnvironment,
+  createRuntimeProvenanceFromEnvironment } from "../packages/defaults/dist/index.js";
 import { runAgentChat } from "./agent-chat-lib.mjs";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
@@ -14,6 +15,7 @@ const runtime = createDefaultRuntime({
   provider: createProviderFromEnvironment({ ...process.env, CAR_PROVIDER: process.env.CAR_PROVIDER ?? "openrouter" }),
   databasePath: join(dataDirectory, "runtime.sqlite"), artifactRoot: join(dataDirectory, "artifacts"),
   workspaceRoot: process.cwd(),
+  provenance: createRuntimeProvenanceFromEnvironment(),
 });
 const terminal = createInterface({ input: stdin, output: stdout });
 

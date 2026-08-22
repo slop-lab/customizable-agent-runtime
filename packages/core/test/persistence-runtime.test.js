@@ -12,19 +12,32 @@ const tools = new ToolDispatcher([]);
 test("sessions, terminal runs, records, and operations survive restart", async () => {
   const directory = mkdtempSync(join(tmpdir(), "car-runtime-"));
   const path = join(directory, "runtime.sqlite");
-  let runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
+  const provenanceOptions = { runtime: { id: "@car/core", version: "0.0.0", sourceRevision: "test-revision" },
+    workspace: { id: "workspace-snapshot" },
+    worker: { id: "test.worker", version: "1" },
+    security: { profile: "test", redactionPolicy: { id: "test.redactor", version: "1" } } };
+  let database = new KernelDatabase(path);
+  let runtime = new Runtime(provider, appendOneTurnDriver, tools, { database, provenance: provenanceOptions });
   const session = await runtime.createSession("stable-command");
   const duplicate = await runtime.createSession("stable-command");
   assert.deepEqual(duplicate, session);
   const run = await runtime.run(session.id, "hello");
   assert.equal(run.status, "completed");
+  const originalProvenance = runtime.getRunProvenance(run.id);
+  assert.equal(originalProvenance.manifest.runtime.sourceRevision, "test-revision");
+  assert.equal(originalProvenance.manifest.worker.id, "test.worker");
+  assert.equal(originalProvenance.manifestHash.length, 64);
+  assert.throws(() => database.db.prepare("UPDATE run_provenance SET manifest_sha256 = 'changed' WHERE run_id = ?")
+    .run(run.id), /run provenance is immutable/);
   runtime.close();
 
-  runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
+  database = new KernelDatabase(path);
+  runtime = new Runtime(provider, appendOneTurnDriver, tools, { database, provenance: provenanceOptions });
   assert.deepEqual(runtime.getSession(session.id), session);
   assert.equal(runtime.getRun(run.id).status, "completed");
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user", "assistant"]);
   assert.deepEqual(runtime.getOperations(run.id).map((operation) => operation.status), ["completed", "completed"]);
+  assert.deepEqual(runtime.getRunProvenance(run.id), originalProvenance);
   runtime.close();
   rmSync(directory, { recursive: true, force: true });
 });

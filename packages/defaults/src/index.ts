@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import type {
   AgentDriver, DriverContext, ExecutionWorker, JsonObject, ModelInvocationRequest, ModelProvider,
-  ProviderCapabilitiesV1, ProviderProfile, ProviderTurn, RuntimeSystem, Tool, WorkerResponse, WorkspaceHandle,
+  ProviderCapabilitiesV1, ProviderProfile, ProviderTurn, RuntimeProvenanceOptions, RuntimeSystem, Tool,
+  WorkerResponse, WorkspaceHandle,
 } from "@car/core";
 import {
   ArtifactStore, KernelDatabase, ModelAttemptFailure, ProviderInvocationError, Runtime, RuntimeError, ToolDispatcher,
@@ -125,6 +126,14 @@ export interface DefaultRuntimeOptions {
   readonly worker?: ExecutionWorker;
   readonly provider?: ModelProvider;
   readonly driver?: AgentDriver;
+  readonly provenance?: RuntimeProvenanceOptions;
+}
+
+export function createRuntimeProvenanceFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): RuntimeProvenanceOptions {
+  return { runtime: { id: "@car/core", version: "0.0.0",
+    ...(environment.CAR_SOURCE_REVISION === undefined ? {} : { sourceRevision: environment.CAR_SOURCE_REVISION }) } };
 }
 
 export function createProviderFromEnvironment(
@@ -152,12 +161,17 @@ export function createProviderFromEnvironment(
 export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runtime {
   const workspace = options.workspace ?? "default" as WorkspaceHandle;
   const worker = options.worker ?? new LocalDevelopmentWorker({ workspace, root: options.workspaceRoot ?? process.cwd() });
+  const provenance: RuntimeProvenanceOptions = {
+    ...(options.provenance ?? {}),
+    ...(options.provenance?.worker !== undefined || worker.identity === undefined ? {} : { worker: worker.identity }),
+  };
   return new Runtime(options.provider ?? new FakeProvider(), options.driver ?? new DemoAgentDriver(),
     new ToolDispatcher(createWorkerTools(worker)), {
       workspace,
       ...(options.system === undefined ? {} : { system: options.system }),
       ...(options.databasePath === undefined ? {} : { database: new KernelDatabase(options.databasePath) }),
       ...(options.artifactRoot === undefined ? {} : { artifactStore: new ArtifactStore(options.artifactRoot) }),
+      provenance,
     });
 }
 

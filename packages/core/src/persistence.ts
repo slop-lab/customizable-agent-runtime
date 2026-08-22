@@ -8,6 +8,7 @@ import type { KernelDatabase } from "./storage.js";
 import type { ArtifactMetadata } from "./artifacts.js";
 import type { ContextProjection, ModelAttempt, ModelAttemptStatus } from "./agent-contracts.js";
 import type { UsageAttempt, UsageFilter } from "./usage.js";
+import type { StoredRunProvenance } from "./provenance.js";
 
 type Row = Readonly<Record<string, unknown>>;
 export interface PendingEvent extends RuntimeEvent { readonly sequence: number }
@@ -56,12 +57,17 @@ export class RuntimeRepository {
     return rows.map(sessionSummaryFromRow);
   }
 
-  createRun(run: Run, operation: Operation, userRecord: RecordEntry, events: readonly RuntimeEvent[]): void {
+  createRun(run: Run, operation: Operation, userRecord: RecordEntry, provenance: StoredRunProvenance,
+    events: readonly RuntimeEvent[]): void {
     this.database.db.prepare("INSERT INTO runs(id, session_id, status, started_at) VALUES (?, ?, ?, ?)")
       .run(run.id, run.sessionId, run.status, run.startedAt);
     this.database.db.prepare("INSERT INTO operations(id, run_id, kind, status, started_at) VALUES (?, ?, ?, ?, ?)")
       .run(operation.id, operation.runId, operation.kind, operation.status, operation.startedAt ?? null);
     this.insertRecord(userRecord);
+    this.database.db.prepare(`INSERT INTO run_provenance(
+      run_id, version, manifest_json, manifest_sha256, created_at
+    ) VALUES (?, ?, ?, ?, ?)`).run(provenance.runId, provenance.manifest.version,
+      JSON.stringify(provenance.manifest), provenance.manifestHash, provenance.createdAt);
     for (const event of events) this.appendEvent(event);
   }
 
@@ -69,6 +75,13 @@ export class RuntimeRepository {
     const row = this.database.db.prepare("SELECT id, session_id, status, started_at, ended_at, error FROM runs WHERE id = ?")
       .get(id) as Row | undefined;
     return row ? runFromRow(row) : undefined;
+  }
+
+  getRunProvenance(runId: string): StoredRunProvenance | undefined {
+    const row = this.database.db.prepare("SELECT * FROM run_provenance WHERE run_id = ?").get(runId) as Row | undefined;
+    return row ? { runId: String(row.run_id),
+      manifest: JSON.parse(String(row.manifest_json)) as StoredRunProvenance["manifest"],
+      manifestHash: String(row.manifest_sha256), createdAt: String(row.created_at) } : undefined;
   }
 
   listRuns(sessionId: string, limit: number): readonly RunSummary[] {

@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { FakeWorker, ProviderInvocationError } from "@car/core";
-import { createDefaultRuntime, DemoAgentDriver, FakeProvider } from "../dist/index.js";
+import { createDefaultRuntime, createRuntimeProvenanceFromEnvironment, DemoAgentDriver, FakeProvider } from "../dist/index.js";
+
+test("runtime source revision is host-injected through a provenance option", () => {
+  assert.deepEqual(createRuntimeProvenanceFromEnvironment({ CAR_SOURCE_REVISION: "abc123" }), {
+    runtime: { id: "@car/core", version: "0.0.0", sourceRevision: "abc123" },
+  });
+  assert.deepEqual(createRuntimeProvenanceFromEnvironment({}), {
+    runtime: { id: "@car/core", version: "0.0.0" },
+  });
+});
 
 test("default runtime exposes the complete development workspace tool set", () => {
   const runtime = createDefaultRuntime({ worker: new FakeWorker(() => ({ ok: true, output: "unused" })) });

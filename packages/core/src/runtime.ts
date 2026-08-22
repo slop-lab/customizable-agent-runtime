@@ -20,6 +20,20 @@ import { ToolDispatcher } from "./tool-dispatcher.js";
 import { defaultTraceRedactor, type TraceRedactor } from "./trace.js";
 import type { WorkspaceHandle } from "./worker.js";
 import { aggregateUsage, type UsageFilter, type UsageReport } from "./usage.js";
+import {
+  createRunProvenance,
+  type ConfiguredComponentIdentity,
+  type RunProvenanceEnvironment,
+  type RuntimeComponentIdentity,
+  type StoredRunProvenance,
+} from "./provenance.js";
+
+export interface RuntimeProvenanceOptions {
+  readonly runtime?: RuntimeComponentIdentity;
+  readonly workspace?: JsonObject;
+  readonly worker?: ConfiguredComponentIdentity;
+  readonly security?: RunProvenanceEnvironment["security"];
+}
 
 export interface RuntimeOptions {
   readonly system?: RuntimeSystem;
@@ -28,6 +42,7 @@ export interface RuntimeOptions {
   readonly workspace?: WorkspaceHandle;
   readonly toolTimeoutMs?: number;
   readonly redactor?: TraceRedactor;
+  readonly provenance?: RuntimeProvenanceOptions;
 }
 
 export interface RunExecution {
@@ -47,6 +62,7 @@ export class Runtime {
   readonly #workspace: WorkspaceHandle;
   readonly #toolTimeoutMs: number;
   readonly #redactor: TraceRedactor;
+  readonly #provenance: RunProvenanceEnvironment;
   readonly #projector = new DefaultContextProjector();
 
   constructor(
@@ -63,6 +79,15 @@ export class Runtime {
     this.#workspace = options.workspace ?? "default" as WorkspaceHandle;
     this.#toolTimeoutMs = options.toolTimeoutMs ?? 30_000;
     this.#redactor = options.redactor ?? defaultTraceRedactor;
+    this.#provenance = {
+      runtime: options.provenance?.runtime ?? { id: "@car/core", version: "0.0.0" },
+      ...(options.provenance?.workspace === undefined ? {} : { workspace: options.provenance.workspace }),
+      ...(options.provenance?.worker === undefined ? {} : { worker: options.provenance.worker }),
+      security: options.provenance?.security ?? {
+        profile: "local-development",
+        redactionPolicy: { id: "core.trace.default", version: "1" },
+      },
+    };
     this.#repository.recoverAbandoned(this.#system.clock.now(), (operation) =>
       this.#event("operation.recovered", { operationId: operation.id, runId: operation.runId }));
   }
@@ -84,6 +109,7 @@ export class Runtime {
     return this.#repository.listSessions(readLimit(options.limit));
   }
   getRun(id: string): Run | undefined { return this.#repository.getRun(id); }
+  getRunProvenance(id: string): StoredRunProvenance | undefined { return this.#repository.getRunProvenance(id); }
   listRuns(sessionId: string, options: { readonly limit?: number } = {}): readonly RunSummary[] {
     if (!this.getSession(sessionId)) throw new RuntimeError("not-found", `Unknown session: ${sessionId}`);
     return this.#repository.listRuns(sessionId, readLimit(options.limit));
@@ -176,7 +202,17 @@ export class Runtime {
       const run: Run = { id: this.#system.ids.next(), sessionId, status: "running", startedAt: now };
       const operation: Operation = { id: this.#system.ids.next(), runId: run.id, kind: "run", status: "running", startedAt: now };
       const record = this.#record(sessionId, run.id, "user", { text: input });
-      this.#repository.database.transaction(() => this.#repository.createRun(run, operation, record, [
+      const provenance = createRunProvenance({ runId: run.id, createdAt: now, environment: this.#provenance,
+        workspaceHandle: this.#workspace, driver: { id: this.driver.id, version: this.driver.version,
+          ...(this.driver.configuration === undefined ? {} : { configuration: this.driver.configuration }) },
+        provider: { id: this.provider.id,
+          ...(this.provider.version === undefined ? {} : { version: this.provider.version }),
+          profile: this.provider.profile,
+          capabilities: this.provider.capabilities,
+          ...(this.provider.transport === undefined ? {} : { transport: this.provider.transport }) },
+        contextProjector: { id: this.#projector.id, version: this.#projector.version }, tools: this.tools.describe(),
+        redact: (value) => this.#redactor.redact(value) });
+      this.#repository.database.transaction(() => this.#repository.createRun(run, operation, record, provenance, [
         this.#event("run.started", run), this.#event("record.appended", record),
       ]));
       return { run, operation };

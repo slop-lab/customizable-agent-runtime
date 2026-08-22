@@ -3,13 +3,15 @@ import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDefaultRuntime, createProviderFromEnvironment } from "../packages/defaults/dist/index.js";
+import { createDefaultRuntime, createProviderFromEnvironment,
+  createRuntimeProvenanceFromEnvironment } from "../packages/defaults/dist/index.js";
 
 if (existsSync(".env")) process.loadEnvFile(".env");
 const directory = mkdtempSync(join(tmpdir(), "car-google-live-"));
 const provider = createProviderFromEnvironment({ ...process.env, CAR_PROVIDER: "google-ai-studio" });
 const runtime = createDefaultRuntime({ provider, databasePath: join(directory, "runtime.sqlite"),
-  artifactRoot: join(directory, "artifacts"), workspaceRoot: process.cwd() });
+  artifactRoot: join(directory, "artifacts"), workspaceRoot: process.cwd(),
+  provenance: createRuntimeProvenanceFromEnvironment() });
 
 try {
   const session = await runtime.createSession("google-live-smoke");

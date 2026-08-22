@@ -30,6 +30,18 @@ const schema = `
     ended_at TEXT,
     error TEXT
   );
+  CREATE TABLE IF NOT EXISTS run_provenance (
+    run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    manifest_json TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE TRIGGER IF NOT EXISTS run_provenance_immutable
+    BEFORE UPDATE ON run_provenance
+    BEGIN
+      SELECT RAISE(ABORT, 'run provenance is immutable');
+    END;
   CREATE TABLE IF NOT EXISTS operations (
     id TEXT PRIMARY KEY,
     run_id TEXT NOT NULL REFERENCES runs(id),
@@ -170,6 +182,11 @@ export class KernelDatabase {
           this.db.exec("ALTER TABLE model_attempts ADD COLUMN normalized_usage_json TEXT");
         }
         this.db.prepare("UPDATE schema_metadata SET version = 3 WHERE singleton = 1").run();
+      }
+      const currentVersion = Number((this.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get() as
+        { version: number }).version);
+      if (currentVersion < 4) {
+        this.db.prepare("UPDATE schema_metadata SET version = 4 WHERE singleton = 1").run();
       }
     });
   }

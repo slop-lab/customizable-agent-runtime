@@ -54,7 +54,7 @@ test("file database rejects a second active writer and permits it after close", 
 
 test("schema migration is transactional", () => {
   const database = new KernelDatabase(":memory:");
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 3);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 4);
   assert.throws(() => database.transaction(() => {
     database.db.exec("CREATE TABLE should_rollback(value TEXT)");
     throw new Error("fail migration");
@@ -73,9 +73,23 @@ test("schema version 2 databases gain normalized provider usage", () => {
   database.db.exec("ALTER TABLE model_attempts DROP COLUMN normalized_usage_json; UPDATE schema_metadata SET version = 2");
   database.close();
   database = new KernelDatabase(path);
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 3);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 4);
   assert.equal(database.db.prepare("PRAGMA table_info(model_attempts)").all()
     .some((column) => column.name === "normalized_usage_json"), true);
+  database.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test("schema version 3 databases gain immutable run provenance storage", () => {
+  const directory = mkdtempSync(join(tmpdir(), "car-migration-v3-"));
+  const path = join(directory, "runtime.sqlite");
+  let database = new KernelDatabase(path);
+  database.db.exec("DROP TRIGGER run_provenance_immutable; DROP TABLE run_provenance; UPDATE schema_metadata SET version = 3");
+  database.close();
+  database = new KernelDatabase(path);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 4);
+  assert.equal(database.db.prepare("SELECT count(*) count FROM sqlite_master WHERE type = 'table' AND name = 'run_provenance'").get().count, 1);
+  assert.equal(database.db.prepare("SELECT count(*) count FROM sqlite_master WHERE type = 'trigger' AND name = 'run_provenance_immutable'").get().count, 1);
   database.close();
   rmSync(directory, { recursive: true, force: true });
 });

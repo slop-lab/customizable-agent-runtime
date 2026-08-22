@@ -25,7 +25,19 @@ test("daemon recovers persisted session history after a process restart", async 
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ input: "persist me" }),
   });
   assert.equal(runResponse.status, 201);
-  assert.equal((await runResponse.json()).status, "completed");
+  const run = await runResponse.json();
+  assert.equal(run.status, "completed");
+  const provenanceResponse = await fetch(`http://127.0.0.1:${port}/v1/runs/${run.id}/provenance`);
+  assert.equal(provenanceResponse.status, 200);
+  const provenance = await provenanceResponse.json();
+  assert.equal(provenance.manifest.runtime.sourceRevision, "test-revision");
+  assert.equal(provenance.manifest.worker.id, "defaults.worker.local-development");
+  assert.equal(provenance.manifest.driver.configuration.maximumAttempts, 12);
+  assert.equal(provenance.manifest.provider.transport.id, "core.transport.in-process");
+  assert.deepEqual(provenance.manifest.tools.map((tool) => tool.id),
+    ["apply_patch", "git_status", "list", "read", "search", "shell", "write"]);
+  assert.equal(provenance.manifestHash.length, 64);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/runs/missing/provenance`)).status, 404);
   const sessionsResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions?limit=10`);
   assert.equal(sessionsResponse.status, 200);
   const sessions = await sessionsResponse.json();
@@ -67,7 +79,8 @@ async function availablePort() {
 async function startDaemon(dataDirectory, port) {
   const child = spawn(process.execPath, ["--enable-source-maps", "dist/main.js"], {
     cwd: new URL("..", import.meta.url),
-    env: { ...process.env, CAR_PROVIDER: "fake", CAR_DATA_DIR: dataDirectory, CAR_PORT: String(port) },
+    env: { ...process.env, CAR_PROVIDER: "fake", CAR_DATA_DIR: dataDirectory, CAR_PORT: String(port),
+      CAR_SOURCE_REVISION: "test-revision" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let stderr = "";

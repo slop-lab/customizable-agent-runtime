@@ -3,7 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { createDefaultRuntime, createProviderFromEnvironment } from "@car/defaults";
+import {
+  createDefaultRuntime,
+  createProviderFromEnvironment,
+  createRuntimeProvenanceFromEnvironment,
+} from "@car/defaults";
 import { RuntimeError } from "@car/core";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -13,7 +17,7 @@ const dataDirectory = process.env.CAR_DATA_DIR ?? join(repositoryRoot, ".car");
 mkdirSync(dataDirectory, { recursive: true });
 const runtime = createDefaultRuntime({ databasePath: join(dataDirectory, "runtime.sqlite"),
   artifactRoot: join(dataDirectory, "artifacts"), workspaceRoot: repositoryRoot,
-  provider: createProviderFromEnvironment() });
+  provider: createProviderFromEnvironment(), provenance: createRuntimeProvenanceFromEnvironment() });
 const host = process.env.CAR_HOST ?? "127.0.0.1";
 const port = Number.parseInt(process.env.CAR_PORT ?? "4317", 10);
 
@@ -92,6 +96,13 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "GET" && runMatch?.[1]) {
     const run = runtime.getRun(runMatch[1]);
     send(response, run ? 200 : 404, run ?? { error: "Run not found" });
+    return;
+  }
+
+  const provenanceMatch = /^\/v1\/runs\/([^/]+)\/provenance$/.exec(url.pathname);
+  if (request.method === "GET" && provenanceMatch?.[1]) {
+    const provenance = runtime.getRunProvenance(provenanceMatch[1]);
+    send(response, provenance ? 200 : 404, provenance ?? { error: "Run provenance not found" });
     return;
   }
 
