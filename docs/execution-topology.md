@@ -21,6 +21,13 @@ An execution backend may use a local process, container, VM, or remote worker,
 but those are implementations of CAR's worker protocol rather than concepts in
 the runtime domain model.
 
+The current second implementation is a separate Node child process. It proves
+the protocol and lifecycle boundary, but it is not the sandbox shown above: it
+shares the host user, kernel, user-visible filesystem, and inherited network
+policy. Its workspace path checks are application policy rather than kernel
+enforcement. Container, VM, and remote backends remain required before CAR can
+claim those stronger isolation properties.
+
 ## What it gains
 
 - SQLite, provider credentials, control sockets, policy state, and audit data
@@ -119,6 +126,8 @@ default. The protocol must distinguish data from authority.
 Implement this split from the first durable slice, but define it as a sandboxed
 execution plane rather than a sandboxed runtime. Keep SQLite in the trusted host
 and make domain IDs, commands, events, capabilities, and worker handles
-storage-independent. Before expanding the plugin API, implement one development
-worker and one isolated worker against the same protocol; the second
-implementation validates the boundary.
+storage-independent. Before expanding the plugin API, retain conformance
+coverage across the development worker and the process-isolated worker, then
+add a genuinely sandboxed backend against the same protocol. The current second
+implementation validates serialization and lifecycle behavior without
+overstating its security boundary.

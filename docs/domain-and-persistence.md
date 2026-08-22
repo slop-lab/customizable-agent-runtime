@@ -63,8 +63,11 @@ same transaction as the run, root operation, first record, and outbox events.
 The structured redacted manifest is authoritative; its canonical SHA-256 digest
 supports integrity checks and comparisons without hiding configuration behind a
 hash. Runtime source revision is supplied by the trusted host rather than
-scraped from the workspace. Worker identity is recorded separately so a later
-isolated backend can attach its own execution-environment manifest.
+scraped from the workspace. Worker identity is recorded separately from the
+first validated, immutable worker-produced execution manifest for each run and
+opaque worker lease. The execution manifest retains the child runtime/platform
+identity, environment key names, resource limits, request types, and canonical
+digest; it excludes environment values and the host workspace path.
 
 Retention needs separate policies for searchable metadata, transcript and
 structured trace, large artifacts, and sensitive/redacted material. Export and

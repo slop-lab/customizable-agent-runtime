@@ -46,15 +46,18 @@ curl -X POST http://127.0.0.1:4317/v1/sessions
 curl http://127.0.0.1:4317/v1/sessions
 curl http://127.0.0.1:4317/v1/usage
 curl http://127.0.0.1:4317/v1/runs/RUN_ID/provenance
+curl http://127.0.0.1:4317/v1/runs/RUN_ID/worker-execution-manifests
 ```
 
 The current implementation is a durable kernel spike. It persists sessions,
-runs, immutable run-provenance manifests, operations, model attempts,
-normalized context projections, provider request/event artifacts, records,
-command receipts, and an event outbox in SQLite. It recovers abandoned work
-after restart and routes default read,
+runs, immutable run and worker-execution provenance manifests, operations,
+model attempts, normalized context projections, provider request/event
+artifacts, records, command receipts, and an event outbox in SQLite. It
+recovers abandoned work after restart and routes default read,
 directory-listing, regex-search, full-file write, unified-diff patch, shell, and
-Git-status tools through a typed workspace worker.
+Git-status tools through a typed workspace worker. Large successful tool output
+is retained as an operation-owned artifact while only a bounded head/tail
+projection and `artifact://` reference enter model context.
 A fake provider supports deterministic tests. OpenRouter Chat Completions and
 Google Interactions adapters support real model-tool-model loops and preserve
 each decoded SSE semantic event. It does not claim production readiness.
@@ -79,8 +82,21 @@ versioned structured manifest and its canonical SHA-256 digest. It identifies
 the runtime/source revision, driver policy, provider/transport, context
 projector, tool schema hashes, workspace, worker, and security/redaction
 profile available when the run was accepted.
+Runs that execute tools through the process backend also expose child-produced,
+immutable execution manifests at
+`GET /v1/runs/{id}/worker-execution-manifests`. Each manifest binds an opaque
+renewable lease to the child Node/platform identity, environment key names,
+resource limits, and supported request types without retaining environment
+values or the host workspace path.
 `GET /v1/artifacts/{id}/content` returns the persisted, redacted request or
 semantic-event stream for local development inspection.
+
+The default development worker remains in-process. Set
+`CAR_WORKER_BACKEND=isolated-process` when starting the daemon to use the lazy
+JSON-lines child-process backend. This validates serialization, cancellation,
+lease renewal/expiry, crash recovery, and explicit environment projection, but
+it is **not a security sandbox**: it shares the host user, kernel, filesystem
+visibility available to that user, and inherited network policy.
 
 Session/run summaries and normalized provider usage are available without
 discarding the provider-native usage object:
