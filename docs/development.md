@@ -33,6 +33,12 @@ just usage --json
 The standalone usage command intentionally calls the daemon API. It does not
 bypass runtime contracts by querying SQLite tables directly.
 
+Set `CAR_SOURCE_REVISION` to a reviewed host-supplied revision when runs need to
+be compared with a precise source state. The daemon and interactive scripts
+record this value in each immutable run-provenance manifest; core never invokes
+Git to infer it from the active workspace. Inspect a manifest through
+`GET /v1/runs/{runId}/provenance`.
+
 ## DIM workflow
 
 CAR uses DIM as development infrastructure, not as part of the runtime kernel.

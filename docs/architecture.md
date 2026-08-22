@@ -37,8 +37,9 @@ cancellable unit of work within or beside a run. A record is immutable history,
 and an artifact stores large or binary content outside a record.
 
 The durable spike implements SQLite-backed sessions, runs, operations, records,
-command receipts, an event outbox, context and usage projections, model
-attempts, and provider artifacts. Its typed development worker supports read,
+command receipts, an event outbox, immutable run-provenance manifests, context
+and usage projections, model attempts, and provider artifacts. Its typed
+development worker supports read,
 directory-listing, regex search, full-file write, unified-diff patch, shell, and
 Git-status execution. Branching, suspension, module state, large tool-output
 projection, and an isolated worker remain planned kernel capabilities. The

@@ -45,12 +45,14 @@ curl http://127.0.0.1:4317/v1/capabilities
 curl -X POST http://127.0.0.1:4317/v1/sessions
 curl http://127.0.0.1:4317/v1/sessions
 curl http://127.0.0.1:4317/v1/usage
+curl http://127.0.0.1:4317/v1/runs/RUN_ID/provenance
 ```
 
 The current implementation is a durable kernel spike. It persists sessions,
-runs, operations, model attempts, normalized context projections, provider
-request/event artifacts, records, command receipts, and an event outbox in
-SQLite. It recovers abandoned work after restart and routes default read,
+runs, immutable run-provenance manifests, operations, model attempts,
+normalized context projections, provider request/event artifacts, records,
+command receipts, and an event outbox in SQLite. It recovers abandoned work
+after restart and routes default read,
 directory-listing, regex-search, full-file write, unified-diff patch, shell, and
 Git-status tools through a typed workspace worker.
 A fake provider supports deterministic tests. OpenRouter Chat Completions and
@@ -71,7 +73,12 @@ and expects the final answer `@car/workspace`. The key is resolved only by the
 HTTP transport and is excluded from request and event artifacts.
 
 Operators can inspect a run through `GET /v1/runs/{id}/operations`,
-`GET /v1/runs/{id}/attempts`, and the linked context and artifact endpoints.
+`GET /v1/runs/{id}/attempts`, `GET /v1/runs/{id}/provenance`, and the linked
+context and artifact endpoints. The provenance response retains a redacted,
+versioned structured manifest and its canonical SHA-256 digest. It identifies
+the runtime/source revision, driver policy, provider/transport, context
+projector, tool schema hashes, workspace, worker, and security/redaction
+profile available when the run was accepted.
 `GET /v1/artifacts/{id}/content` returns the persisted, redacted request or
 semantic-event stream for local development inspection.
 

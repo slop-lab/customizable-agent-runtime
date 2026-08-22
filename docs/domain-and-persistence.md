@@ -58,6 +58,14 @@ responses, tool inputs/results, lifecycle events, retries, usage, effective
 configuration, and provenance. Raw secrets, credential material, and explicitly
 sensitive fields are never retained merely because full tracing is enabled.
 
+Each accepted run has one immutable versioned provenance manifest stored in the
+same transaction as the run, root operation, first record, and outbox events.
+The structured redacted manifest is authoritative; its canonical SHA-256 digest
+supports integrity checks and comparisons without hiding configuration behind a
+hash. Runtime source revision is supplied by the trusted host rather than
+scraped from the workspace. Worker identity is recorded separately so a later
+isolated backend can attach its own execution-environment manifest.
+
 Retention needs separate policies for searchable metadata, transcript and
 structured trace, large artifacts, and sensitive/redacted material. Export and
 deletion must include module state and artifacts, not just conversation rows.
