@@ -32,7 +32,9 @@ function projectRecord(record: RecordEntry): NormalizedContent | undefined {
   }
   if (record.kind === "tool-result" && typeof data.callId === "string") {
     return { type: "tool-result", callId: data.callId, output: data.output,
-      isError: data.isError === true };
+      isError: data.isError === true,
+      ...(Array.isArray(data.artifacts) ? { artifacts: data.artifacts as NonNullable<
+        Extract<NormalizedContent, { type: "tool-result" }>["artifacts"]> } : {}) };
   }
   if (record.kind === "provider-native" && typeof data.provider === "string") {
     return { type: "provider-native", provider: data.provider, value: data.value };

@@ -1,11 +1,12 @@
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import type {
   AgentDriver, DriverContext, ExecutionWorker, JsonObject, ModelInvocationRequest, ModelProvider,
   ProviderCapabilitiesV1, ProviderProfile, ProviderTurn, RuntimeProvenanceOptions, RuntimeSystem, Tool,
   WorkerResponse, WorkspaceHandle,
 } from "@car/core";
 import {
-  ArtifactStore, KernelDatabase, ModelAttemptFailure, ProviderInvocationError, Runtime, RuntimeError, ToolDispatcher,
+  ArtifactIngressStore, ArtifactStore, KernelDatabase, ModelAttemptFailure, ProviderInvocationError, Runtime,
+  RuntimeError, ToolDispatcher,
 } from "@car/core";
 import { LocalDevelopmentWorker } from "./local-worker.js";
 import { EnvironmentCredentialResolver } from "./credentials.js";
@@ -121,6 +122,7 @@ export interface DefaultRuntimeOptions {
   readonly system?: RuntimeSystem;
   readonly databasePath?: string;
   readonly artifactRoot?: string;
+  readonly artifactIngressRoot?: string;
   readonly workspaceRoot?: string;
   readonly workspace?: WorkspaceHandle;
   readonly worker?: ExecutionWorker;
@@ -160,7 +162,11 @@ export function createProviderFromEnvironment(
 
 export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runtime {
   const workspace = options.workspace ?? "default" as WorkspaceHandle;
-  const worker = options.worker ?? new LocalDevelopmentWorker({ workspace, root: options.workspaceRoot ?? process.cwd() });
+  const artifactIngressRoot = options.artifactIngressRoot ?? (options.artifactRoot === undefined
+    ? undefined : join(dirname(options.artifactRoot), "worker-ingress"));
+  const artifactIngress = artifactIngressRoot === undefined ? undefined : new ArtifactIngressStore(artifactIngressRoot);
+  const worker = options.worker ?? new LocalDevelopmentWorker({ workspace, root: options.workspaceRoot ?? process.cwd(),
+    ...(artifactIngress === undefined ? {} : { artifactIngress }) });
   const provenance: RuntimeProvenanceOptions = {
     ...(options.provenance ?? {}),
     ...(options.provenance?.worker !== undefined || worker.identity === undefined ? {} : { worker: worker.identity }),
@@ -171,6 +177,7 @@ export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runti
       ...(options.system === undefined ? {} : { system: options.system }),
       ...(options.databasePath === undefined ? {} : { database: new KernelDatabase(options.databasePath) }),
       ...(options.artifactRoot === undefined ? {} : { artifactStore: new ArtifactStore(options.artifactRoot) }),
+      ...(artifactIngress === undefined ? {} : { artifactIngress }),
       provenance,
     });
 }
@@ -252,7 +259,10 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
 }
 
 function toolResult(response: WorkerResponse) {
-  if (response.ok) return { output: response.output };
+  if (response.ok) return { output: response.output,
+    ...(response.artifact === undefined ? {} : { artifactIngress: response.artifact }),
+    ...(response.lease === undefined ? {} : { workerLease: response.lease }),
+    ...(response.executionManifest === undefined ? {} : { workerExecutionManifest: response.executionManifest }) };
   throw new RuntimeError(response.code === "cancelled" ? "cancelled" : "internal", response.message,
     { workerCode: response.code, uncertain: response.uncertain ?? false });
 }

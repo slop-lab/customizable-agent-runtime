@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ExecutionWorker, WorkerRequest, WorkerResponse, WorkspaceHandle } from "@car/core";
+import { ArtifactIngressStore } from "@car/core";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,6 +12,8 @@ export interface LocalWorkerOptions {
   readonly workspace: WorkspaceHandle;
   readonly root: string;
   readonly maxOutputBytes?: number;
+  readonly maxArtifactBytes?: number;
+  readonly artifactIngress?: ArtifactIngressStore;
   readonly environment?: Readonly<Record<string, string>>;
 }
 
@@ -18,11 +21,13 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
   readonly identity = { id: "defaults.worker.local-development", version: "1" } as const;
   readonly #root: Promise<string>;
   readonly #maxOutputBytes: number;
+  readonly #maxArtifactBytes: number;
   readonly #environment: Readonly<Record<string, string>>;
 
   constructor(private readonly options: LocalWorkerOptions) {
     this.#root = realpath(options.root);
     this.#maxOutputBytes = options.maxOutputBytes ?? 1_048_576;
+    this.#maxArtifactBytes = options.maxArtifactBytes ?? 16 * 1024 * 1024;
     this.#environment = options.environment ?? { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8" };
   }
 
@@ -35,16 +40,14 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
       if (request.type === "readFile") {
         const path = await this.#resolve(request.path, request.cwd);
         const output = await readFile(path, "utf8");
-        if (Buffer.byteLength(output) > this.#maxOutputBytes) return failure("output-limit", "File exceeds worker output limit");
-        return { ok: true, output };
+        return this.#output(request, output);
       }
       if (request.type === "list") {
         const path = await this.#resolve(request.path, request.cwd);
         const entries = await readdir(path, { withFileTypes: true });
         const output = entries.sort((a, b) => a.name.localeCompare(b.name))
           .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`).join("\n");
-        if (Buffer.byteLength(output) > this.#maxOutputBytes) return failure("output-limit", "Directory listing exceeds worker output limit");
-        return { ok: true, output, metadata: { entries: entries.length } };
+        return this.#output(request, output, { entries: entries.length });
       }
       if (request.type === "search") {
         const cwd = await this.#resolve(".", request.cwd);
@@ -52,10 +55,10 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
         try {
           const result = await execFileAsync("rg", ["--line-number", "--with-filename", "--color=never", "--no-heading",
             "--", request.query, relative(cwd, path) || "."], {
-            cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxOutputBytes,
+            cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
           });
           const output = `${result.stdout}${result.stderr}`;
-          return { ok: true, output, metadata: { matches: lineCount(result.stdout) } };
+          return this.#output(request, output, { matches: lineCount(result.stdout) });
         } catch (error) {
           const value = error as { code?: string | number };
           if (value.code === 1) return { ok: true, output: "", metadata: { matches: 0 } };
@@ -77,7 +80,7 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
         try {
           await writeFile(patchPath, request.patch, { encoding: "utf8", signal });
           const result = await execFileAsync("git", ["apply", "--whitespace=nowarn", patchPath], {
-            cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxOutputBytes,
+            cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
           });
           return { ok: true, output: `${result.stdout}${result.stderr}` || "Applied patch" };
         } finally { await rm(temporary, { recursive: true, force: true }); }
@@ -85,15 +88,15 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
       if (request.type === "gitStatus") {
         const cwd = await this.#resolve(".", request.cwd);
         const result = await execFileAsync("git", ["status", "--short", "--branch"], {
-          cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxOutputBytes,
+          cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
         });
-        return { ok: true, output: `${result.stdout}${result.stderr}` };
+        return this.#output(request, `${result.stdout}${result.stderr}`);
       }
       const cwd = await this.#resolve(".", request.cwd);
       const result = await execFileAsync("/bin/sh", ["-lc", request.command], {
-        cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxOutputBytes,
+        cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
       });
-      return { ok: true, output: `${result.stdout}${result.stderr}` };
+      return this.#output(request, `${result.stdout}${result.stderr}`);
     } catch (error) {
       const uncertain = isSideEffecting(request);
       if (signal.aborted) return failure("cancelled", "Operation was cancelled", uncertain);
@@ -103,6 +106,19 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
       if (value.code === "CAR_INVALID_SCOPE") return failure("invalid-scope", value.message ?? "Path is outside workspace");
       return failure("worker-failed", value.message ?? String(error), uncertain);
     }
+  }
+
+  #output(request: WorkerRequest, output: string,
+    metadata?: Readonly<Record<string, unknown>>): WorkerResponse {
+    const bytes = Buffer.byteLength(output);
+    if (bytes <= this.#maxOutputBytes) return { ok: true, output,
+      ...(metadata === undefined ? {} : { metadata }) };
+    if (bytes > this.#maxArtifactBytes || this.options.artifactIngress === undefined) {
+      return failure("output-limit", `Worker output exceeds ${this.#maxArtifactBytes} bytes`, isSideEffecting(request));
+    }
+    const artifact = this.options.artifactIngress.stageText(request.operationId, output);
+    return { ok: true, output: projectOutput(output, this.#maxOutputBytes), artifact,
+      ...(metadata === undefined ? {} : { metadata }) };
   }
 
   async #resolve(path: string, cwd = "."): Promise<string> {
@@ -157,4 +173,14 @@ function lineCount(value: string): number {
 }
 function isSideEffecting(request: WorkerRequest): boolean {
   return request.type === "writeFile" || request.type === "applyPatch" || request.type === "shell";
+}
+
+function projectOutput(value: string, maximumBytes: number): string {
+  const bytes = Buffer.from(value);
+  const marker = Buffer.from(`\n... ${bytes.byteLength} bytes total; middle omitted ...\n`);
+  if (maximumBytes <= marker.byteLength) return marker.subarray(0, maximumBytes).toString("utf8");
+  const available = maximumBytes - marker.byteLength;
+  const headBytes = Math.floor(available * 0.65);
+  return Buffer.concat([bytes.subarray(0, headBytes), marker,
+    bytes.subarray(bytes.byteLength - (available - headBytes))]).toString("utf8");
 }

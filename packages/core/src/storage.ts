@@ -84,7 +84,10 @@ const schema = `
     byte_length INTEGER NOT NULL DEFAULT 0,
     sha256 TEXT,
     created_at TEXT NOT NULL,
-    finalized_at TEXT
+    finalized_at TEXT,
+    owner_type TEXT,
+    owner_id TEXT,
+    run_id TEXT REFERENCES runs(id)
   );
   CREATE TABLE IF NOT EXISTS context_projections (
     id TEXT PRIMARY KEY,
@@ -187,6 +190,21 @@ export class KernelDatabase {
         { version: number }).version);
       if (currentVersion < 4) {
         this.db.prepare("UPDATE schema_metadata SET version = 4 WHERE singleton = 1").run();
+      }
+      const artifactVersion = Number((this.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get() as
+        { version: number }).version);
+      if (artifactVersion < 5) {
+        const columns = this.db.prepare("PRAGMA table_info(artifacts)").all() as { name: string }[];
+        if (!columns.some((column) => column.name === "owner_type")) {
+          this.db.exec("ALTER TABLE artifacts ADD COLUMN owner_type TEXT");
+        }
+        if (!columns.some((column) => column.name === "owner_id")) {
+          this.db.exec("ALTER TABLE artifacts ADD COLUMN owner_id TEXT");
+        }
+        if (!columns.some((column) => column.name === "run_id")) {
+          this.db.exec("ALTER TABLE artifacts ADD COLUMN run_id TEXT REFERENCES runs(id)");
+        }
+        this.db.prepare("UPDATE schema_metadata SET version = 5 WHERE singleton = 1").run();
       }
     });
   }

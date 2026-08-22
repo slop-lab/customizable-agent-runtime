@@ -124,8 +124,9 @@ export class RuntimeRepository {
   }
 
   finishOperation(id: string, status: OperationStatus, now: string, event: RuntimeEvent,
-    result?: unknown, error?: string): Operation {
+    result?: unknown, error?: string, artifacts: readonly ArtifactMetadata[] = []): Operation {
     return this.database.transaction(() => {
+      for (const artifact of artifacts) this.saveArtifact(artifact);
       const operation = this.transitionOperation(id, status, now, result, error);
       this.appendEvent(event);
       return operation;
@@ -198,12 +199,14 @@ export class RuntimeRepository {
 
   saveArtifact(artifact: ArtifactMetadata): void {
     this.database.db.prepare(`INSERT INTO artifacts(
-      id, kind, media_type, relative_path, status, byte_length, sha256, created_at, finalized_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      id, kind, media_type, relative_path, status, byte_length, sha256, created_at, finalized_at,
+      owner_type, owner_id, run_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET status=excluded.status, byte_length=excluded.byte_length,
       sha256=excluded.sha256, finalized_at=excluded.finalized_at`)
       .run(artifact.id, artifact.kind, artifact.mediaType, artifact.relativePath, artifact.status,
-        artifact.byteLength, artifact.sha256 ?? null, artifact.createdAt, artifact.finalizedAt ?? null);
+        artifact.byteLength, artifact.sha256 ?? null, artifact.createdAt, artifact.finalizedAt ?? null,
+        artifact.ownership?.type ?? null, artifact.ownership?.id ?? null, artifact.ownership?.runId ?? null);
   }
 
   getArtifact(id: string): ArtifactMetadata | undefined {
@@ -325,7 +328,11 @@ function artifactFromRow(row: Row): ArtifactMetadata {
     mediaType: String(row.media_type), relativePath: String(row.relative_path),
     status: String(row.status) as ArtifactMetadata["status"], byteLength: Number(row.byte_length),
     createdAt: String(row.created_at), ...(row.sha256 === null ? {} : { sha256: String(row.sha256) }),
-    ...(row.finalized_at === null ? {} : { finalizedAt: String(row.finalized_at) }) };
+    ...(row.finalized_at === null ? {} : { finalizedAt: String(row.finalized_at) }),
+    ...(row.owner_type === null || row.owner_id === null || row.run_id === null ? {} : { ownership: {
+      type: String(row.owner_type) as NonNullable<ArtifactMetadata["ownership"]>["type"],
+      id: String(row.owner_id), runId: String(row.run_id),
+    } }) };
 }
 function contextFromRow(row: Row): ContextProjection {
   return { id: String(row.id), runId: String(row.run_id), projectorId: String(row.projector_id),

@@ -6,7 +6,12 @@ import type {
   NormalizedContent,
 } from "./agent-contracts.js";
 import { ModelAttemptFailure, ProviderInvocationError } from "./agent-contracts.js";
-import { ArtifactStore, type ArtifactMetadata } from "./artifacts.js";
+import {
+  ArtifactIngressStore,
+  ArtifactStore,
+  type ArtifactMetadata,
+  type ArtifactReference,
+} from "./artifacts.js";
 import type {
   RecordEntry, RecordKind, Run, RunSummary, RuntimeEvent, Session, SessionSummary, ToolResult,
 } from "./contracts.js";
@@ -43,6 +48,7 @@ export interface RuntimeOptions {
   readonly toolTimeoutMs?: number;
   readonly redactor?: TraceRedactor;
   readonly provenance?: RuntimeProvenanceOptions;
+  readonly artifactIngress?: ArtifactIngressStore;
 }
 
 export interface RunExecution {
@@ -58,6 +64,7 @@ export class Runtime {
   readonly #database: KernelDatabase;
   readonly #repository: RuntimeRepository;
   readonly #artifactStore: ArtifactStore;
+  readonly #artifactIngress: ArtifactIngressStore | undefined;
   readonly #temporaryArtifactRoot: string | undefined;
   readonly #workspace: WorkspaceHandle;
   readonly #toolTimeoutMs: number;
@@ -76,6 +83,7 @@ export class Runtime {
     this.#repository = new RuntimeRepository(this.#database);
     this.#temporaryArtifactRoot = options.artifactStore ? undefined : mkdtempSync(join(tmpdir(), "car-artifacts-"));
     this.#artifactStore = options.artifactStore ?? new ArtifactStore(this.#temporaryArtifactRoot!);
+    this.#artifactIngress = options.artifactIngress;
     this.#workspace = options.workspace ?? "default" as WorkspaceHandle;
     this.#toolTimeoutMs = options.toolTimeoutMs ?? 30_000;
     this.#redactor = options.redactor ?? defaultTraceRedactor;
@@ -228,8 +236,11 @@ export class Runtime {
     const attemptId = this.#system.ids.next();
     const operation: Operation = { id: this.#system.ids.next(), runId, kind: "model", status: "running", startedAt: now };
     const context = this.#projector.project(this.#system.ids.next(), runId, this.getRecords(sessionId), now);
-    const requestWriter = this.#artifactStore.create(this.#system.ids.next(), "provider-request", "application/json", now);
-    const eventWriter = this.#artifactStore.create(this.#system.ids.next(), "provider-events", "application/x-ndjson", now);
+    const ownership = { type: "model-attempt", id: attemptId, runId } as const;
+    const requestWriter = this.#artifactStore.create(this.#system.ids.next(), "provider-request", "application/json", now,
+      ownership);
+    const eventWriter = this.#artifactStore.create(this.#system.ids.next(), "provider-events", "application/x-ndjson", now,
+      ownership);
     await this.#database.writer.run(() => {
       this.#repository.saveContextProjection(context);
       this.#repository.saveArtifact(requestWriter.metadata); this.#repository.saveArtifact(eventWriter.metadata);
@@ -320,16 +331,19 @@ export class Runtime {
     this.#publishPending();
     let operationFinished = false;
     try {
-      const result = await this.tools.dispatch(call.toolName, call.input, { sessionId, runId,
+      const dispatched = await this.tools.dispatch(call.toolName, call.input, { sessionId, runId,
         operationId: operation.id, workspace: this.#workspace,
         deadline: new Date(Date.parse(this.#system.clock.now()) + this.#toolTimeoutMs).toISOString(), signal });
       signal.throwIfAborted();
-      await this.#finishTool(operation, "completed", this.#redactor.redact(result));
+      const prepared = this.#prepareToolResult(runId, operation.id, dispatched);
+      await this.#finishTool(operation, "completed", this.#redactor.redact(prepared.result), undefined,
+        prepared.artifact === undefined ? [] : [prepared.artifact]);
       operationFinished = true;
       signal.throwIfAborted();
       await this.#appendNormalized(sessionId, runId, { type: "tool-result", callId: call.callId,
-        output: result.output, isError: result.isError === true }, signal);
-      return result;
+        output: prepared.result.output, isError: prepared.result.isError === true,
+        ...(prepared.result.artifacts === undefined ? {} : { artifacts: prepared.result.artifacts }) }, signal);
+      return prepared.result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (!operationFinished) {
@@ -344,14 +358,37 @@ export class Runtime {
   }
 
   async #finishTool(operation: Operation, status: "completed" | "failed" | "cancelled",
-    result?: unknown, error?: string): Promise<void> {
+    result?: unknown, error?: string, artifacts: readonly ArtifactMetadata[] = []): Promise<void> {
     await this.#database.writer.run(() => {
       const now = this.#system.clock.now();
       this.#repository.finishOperation(operation.id, status, now,
         this.#event("operation.finished", { ...operation, status, endedAt: now,
-          ...(result === undefined ? {} : { result }), ...(error === undefined ? {} : { error }) }), result, error);
+          ...(result === undefined ? {} : { result }), ...(error === undefined ? {} : { error }) }), result, error, artifacts);
     });
     this.#publishPending();
+  }
+
+  #prepareToolResult(runId: string, operationId: string, result: ToolResult): {
+    readonly result: ToolResult;
+    readonly artifact?: ArtifactMetadata;
+  } {
+    if (result.artifactIngress === undefined) return { result };
+    if (this.#artifactIngress === undefined) {
+      throw new RuntimeError("internal", "Worker returned artifact ingress without a configured ingress store");
+    }
+    const now = this.#system.clock.now();
+    const artifact = this.#artifactStore.ingest(this.#system.ids.next(), result.artifactIngress,
+      this.#artifactIngress, { type: "operation", id: operationId, runId }, now);
+    const reference: ArtifactReference = { id: artifact.id, kind: artifact.kind, mediaType: artifact.mediaType,
+      byteLength: artifact.byteLength, sha256: artifact.sha256! };
+    const output = `${result.output}${result.output.length === 0 ? "" : "\n"}` +
+      `[full output: artifact://${artifact.id} (${artifact.byteLength} bytes)]`;
+    return { artifact, result: { output, ...(result.isError === undefined ? {} : { isError: result.isError }),
+      artifacts: [...(result.artifacts ?? []), reference],
+      ...(result.workerLease === undefined ? {} : { workerLease: result.workerLease }),
+      ...(result.workerExecutionManifest === undefined ? {} : {
+        workerExecutionManifest: result.workerExecutionManifest,
+      }) } };
   }
 
   async #append(sessionId: string, runId: string, kind: RecordKind, data: unknown,
