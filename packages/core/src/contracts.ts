@@ -44,6 +44,7 @@ export interface Provider {
 
 export interface ToolDescription {
   readonly name: string;
+  readonly version?: string;
   readonly description: string;
   readonly inputSchema?: Readonly<Record<string, unknown>>;
   readonly validateInput?: (input: unknown) => string | undefined;

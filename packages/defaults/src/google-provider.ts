@@ -9,10 +9,12 @@ import { parseSseJson } from "./sse.js";
 export { parseSseJson } from "./sse.js";
 
 export interface GoogleInteractionsTransport {
+  readonly identity?: { readonly id: string; readonly version: string };
   stream(body: JsonObject, signal: AbortSignal): AsyncIterable<unknown>;
 }
 
 export class GoogleFetchInteractionsTransport implements GoogleInteractionsTransport {
+  readonly identity = { id: "defaults.transport.google-fetch", version: "1" } as const;
   constructor(
     private readonly endpoint: string,
     private readonly credentialHandle: string,
@@ -62,6 +64,8 @@ export interface GoogleProviderOptions {
 
 export class GoogleInteractionsProvider implements ModelProvider {
   readonly id = "google.interactions";
+  readonly version = "1";
+  readonly transport: { readonly id: string; readonly version: string };
   readonly profile: ProviderProfile;
   readonly capabilities: ProviderCapabilitiesV1 = { version: 1, values: {
     "core.streaming.text": { supported: true },
@@ -74,6 +78,7 @@ export class GoogleInteractionsProvider implements ModelProvider {
   constructor(private readonly options: GoogleProviderOptions) {
     this.profile = { id: "google-ai-studio", provider: "google", model: options.model,
       endpoint: options.endpoint, credentialHandle: options.credentialHandle };
+    this.transport = options.transport.identity ?? { id: "unidentified", version: "unversioned" };
   }
 
   async invoke(request: ModelInvocationRequest): Promise<ProviderTurn> {

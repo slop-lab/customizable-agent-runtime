@@ -7,10 +7,12 @@ import type { CredentialResolver } from "./credentials.js";
 import { parseSseJson } from "./sse.js";
 
 export interface OpenRouterTransport {
+  readonly identity?: { readonly id: string; readonly version: string };
   stream(body: JsonObject, signal: AbortSignal): AsyncIterable<unknown>;
 }
 
 export class OpenRouterFetchTransport implements OpenRouterTransport {
+  readonly identity = { id: "defaults.transport.openrouter-fetch", version: "1" } as const;
   constructor(
     private readonly endpoint: string,
     private readonly credentialHandle: string,
@@ -56,6 +58,8 @@ export interface OpenRouterProviderOptions {
 
 export class OpenRouterChatProvider implements ModelProvider {
   readonly id = "openrouter.chat-completions";
+  readonly version = "1";
+  readonly transport: { readonly id: string; readonly version: string };
   readonly profile: ProviderProfile;
   readonly capabilities: ProviderCapabilitiesV1 = { version: 1, values: {
     "core.streaming.text": { supported: true },
@@ -68,6 +72,7 @@ export class OpenRouterChatProvider implements ModelProvider {
   constructor(private readonly options: OpenRouterProviderOptions) {
     this.profile = { id: "openrouter", provider: "openrouter", model: options.model,
       endpoint: options.endpoint, credentialHandle: options.credentialHandle };
+    this.transport = options.transport.identity ?? { id: "unidentified", version: "unversioned" };
   }
 
   async invoke(request: ModelInvocationRequest): Promise<ProviderTurn> {

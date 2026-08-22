@@ -22,10 +22,12 @@ export type WorkerResponse =
       readonly message: string; readonly uncertain?: boolean };
 
 export interface ExecutionWorker {
+  readonly identity?: ConfiguredComponentIdentity;
   execute(request: WorkerRequest, signal: AbortSignal): Promise<WorkerResponse>;
 }
 
 export class FakeWorker implements ExecutionWorker {
+  readonly identity = { id: "core.worker.fake", version: "1" } as const;
   readonly requests: WorkerRequest[] = [];
   constructor(private readonly handler: (request: WorkerRequest, signal: AbortSignal) => WorkerResponse | Promise<WorkerResponse>) {}
   async execute(request: WorkerRequest, signal: AbortSignal): Promise<WorkerResponse> {
@@ -33,3 +35,4 @@ export class FakeWorker implements ExecutionWorker {
     return this.handler(request, signal);
   }
 }
+import type { ConfiguredComponentIdentity } from "./provenance.js";

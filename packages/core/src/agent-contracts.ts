@@ -1,4 +1,5 @@
 import type { RecordEntry, ToolDescription, ToolResult } from "./contracts.js";
+import type { ComponentIdentity } from "./provenance.js";
 
 export type JsonObject = Readonly<Record<string, unknown>>;
 
@@ -63,8 +64,10 @@ export interface ModelInvocationRequest {
 
 export interface ModelProvider {
   readonly id: string;
+  readonly version?: string;
   readonly profile: ProviderProfile;
   readonly capabilities: ProviderCapabilitiesV1;
+  readonly transport?: ComponentIdentity;
   invoke(request: ModelInvocationRequest): Promise<ProviderTurn>;
 }
 
@@ -135,5 +138,6 @@ export interface DriverContext {
 export interface AgentDriver {
   readonly id: string;
   readonly version: string;
+  readonly configuration?: JsonObject;
   run(context: DriverContext): Promise<void>;
 }

@@ -24,6 +24,8 @@ export type FakeProviderAction =
 
 export class FakeProvider implements ModelProvider {
   readonly id = "fake.echo";
+  readonly version = "1";
+  readonly transport = { id: "core.transport.in-process", version: "1" } as const;
   readonly profile: ProviderProfile = { id: "fake", provider: "fake", model: "echo",
     endpoint: "fake://local", credentialHandle: "none" };
   readonly capabilities: ProviderCapabilitiesV1 = { version: 1, values: {
@@ -66,12 +68,16 @@ export class DemoAgentDriver implements AgentDriver {
   readonly #maximumRetries: number;
   readonly #repeatedToolCallLimit: number;
   readonly #sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  readonly configuration: JsonObject;
 
   constructor(options: DemoDriverOptions = {}) {
     this.#maximumAttempts = options.maximumAttempts ?? 12;
     this.#maximumRetries = options.maximumRetries ?? 3;
     this.#repeatedToolCallLimit = options.repeatedToolCallLimit ?? 3;
     this.#sleep = options.sleep ?? abortableDelay;
+    this.configuration = { maximumAttempts: this.#maximumAttempts, maximumRetries: this.#maximumRetries,
+      repeatedToolCallLimit: this.#repeatedToolCallLimit,
+      retryBackoff: { kind: "exponential", initialMs: 250, maximumMs: 2_000 } };
   }
 
   async run(context: DriverContext): Promise<void> {
@@ -157,7 +163,7 @@ export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runti
 
 export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
   const read: Tool = {
-    description: { name: "read", description: "Read a UTF-8 file through the workspace worker.",
+    description: { name: "read", version: "1", description: "Read a UTF-8 file through the workspace worker.",
       inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
       validateInput: (input) => isPathInput(input) ? undefined : "Expected an object with a string path." },
     async execute(input, context) {
@@ -167,7 +173,7 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
     },
   };
   const shell: Tool = {
-    description: { name: "shell", description: "Run a non-interactive shell command through the workspace worker.",
+    description: { name: "shell", version: "1", description: "Run a non-interactive shell command through the workspace worker.",
       inputSchema: { type: "object", properties: { command: { type: "string" }, cwd: { type: "string" } }, required: ["command"] },
       validateInput: (input) => isCommandInput(input) ? undefined : "Expected an object with a string command." },
     async execute(input, context) {
@@ -178,7 +184,7 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
     },
   };
   const list: Tool = {
-    description: { name: "list", description: "List a directory through the workspace worker.",
+    description: { name: "list", version: "1", description: "List a directory through the workspace worker.",
       inputSchema: { type: "object", properties: { path: { type: "string" } } },
       validateInput: (input) => isOptionalPathInput(input) ? undefined : "Expected an object with an optional string path." },
     async execute(input, context) {
@@ -188,7 +194,7 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
     },
   };
   const search: Tool = {
-    description: { name: "search", description: "Search workspace text with a regular expression through the workspace worker.",
+    description: { name: "search", version: "1", description: "Search workspace text with a regular expression through the workspace worker.",
       inputSchema: { type: "object", properties: { query: { type: "string" }, path: { type: "string" } }, required: ["query"] },
       validateInput: (input) => isSearchInput(input) ? undefined : "Expected an object with a non-empty query and optional string path." },
     async execute(input, context) {
@@ -199,7 +205,7 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
     },
   };
   const write: Tool = {
-    description: { name: "write", description: "Replace a UTF-8 file through the workspace worker, creating parent directories when needed.",
+    description: { name: "write", version: "1", description: "Replace a UTF-8 file through the workspace worker, creating parent directories when needed.",
       inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } },
         required: ["path", "content"] },
       validateInput: (input) => isWriteInput(input) ? undefined : "Expected an object with string path and content." },
@@ -210,7 +216,7 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
     },
   };
   const applyPatch: Tool = {
-    description: { name: "apply_patch", description: "Apply a standard unified diff relative to the workspace root.",
+    description: { name: "apply_patch", version: "1", description: "Apply a standard unified diff relative to the workspace root.",
       inputSchema: { type: "object", properties: { patch: { type: "string" } }, required: ["patch"] },
       validateInput: (input) => isPatchInput(input) ? undefined : "Expected an object with a non-empty unified-diff patch." },
     async execute(input, context) {
@@ -220,7 +226,7 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
     },
   };
   const gitStatus: Tool = {
-    description: { name: "git_status", description: "Show concise Git workspace status.",
+    description: { name: "git_status", version: "1", description: "Show concise Git workspace status.",
       inputSchema: { type: "object", properties: {}, additionalProperties: false },
       validateInput: (input) => isEmptyObject(input) ? undefined : "Expected an empty object." },
     async execute(_input, context) {

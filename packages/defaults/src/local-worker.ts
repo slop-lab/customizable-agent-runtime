@@ -15,6 +15,7 @@ export interface LocalWorkerOptions {
 }
 
 export class LocalDevelopmentWorker implements ExecutionWorker {
+  readonly identity = { id: "defaults.worker.local-development", version: "1" } as const;
   readonly #root: Promise<string>;
   readonly #maxOutputBytes: number;
   readonly #environment: Readonly<Record<string, string>>;
