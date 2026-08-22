@@ -24,7 +24,7 @@ try {
     ...(arguments_.resume === undefined ? {} : { initialSessionId: arguments_.resume }) });
 } finally {
   if (!terminal.closed) terminal.close();
-  runtime.close();
+  await runtime.close();
 }
 
 function parseArguments(args) {

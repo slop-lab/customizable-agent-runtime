@@ -29,7 +29,7 @@ test("sessions, terminal runs, records, and operations survive restart", async (
   assert.equal(originalProvenance.manifestHash.length, 64);
   assert.throws(() => database.db.prepare("UPDATE run_provenance SET manifest_sha256 = 'changed' WHERE run_id = ?")
     .run(run.id), /run provenance is immutable/);
-  runtime.close();
+  await runtime.close();
 
   database = new KernelDatabase(path);
   runtime = new Runtime(provider, appendOneTurnDriver, tools, { database, provenance: provenanceOptions });
@@ -38,7 +38,7 @@ test("sessions, terminal runs, records, and operations survive restart", async (
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user", "assistant"]);
   assert.deepEqual(runtime.getOperations(run.id).map((operation) => operation.status), ["completed", "completed"]);
   assert.deepEqual(runtime.getRunProvenance(run.id), originalProvenance);
-  runtime.close();
+  await runtime.close();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -80,7 +80,7 @@ test("session and run summaries are durable, bounded, and distinguish retries fr
   assert.equal(runtime.listSessions({ limit: 1 }).length, 1);
   assert.throws(() => runtime.listSessions({ limit: 0 }), /Limit must be/);
   assert.throws(() => runtime.listRuns("missing"), /Unknown session/);
-  runtime.close();
+  await runtime.close();
 });
 
 test("a command failure rolls back materialized state and its receipt", () => {
@@ -100,14 +100,14 @@ test("committed outbox events publish after a restart", async () => {
   const path = join(directory, "runtime.sqlite");
   let runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
   const session = await runtime.createSession("event-command");
-  runtime.close();
+  await runtime.close();
 
   runtime = new Runtime(provider, appendOneTurnDriver, tools, { database: new KernelDatabase(path) });
   const events = [];
   runtime.subscribe((event) => events.push(event));
   assert.equal(events.filter((event) => event.type === "session.created").length, 1);
   assert.equal(events.find((event) => event.type === "session.created").data.id, session.id);
-  runtime.close();
+  await runtime.close();
   rmSync(directory, { recursive: true, force: true });
 });
 
@@ -120,7 +120,7 @@ test("outbox retains the same event for retry when publication fails", async () 
   runtime.subscribe((event) => retried.push(event));
   assert.equal(retried.find((event) => event.type === "session.created").id, failedId);
   assert.equal(retried.find((event) => event.type === "session.created").data.id, session.id);
-  runtime.close();
+  await runtime.close();
 });
 
 test("startup abandons stale running operations without changing terminal operations", async () => {
@@ -147,6 +147,6 @@ test("startup abandons stale running operations without changing terminal operat
   assert.equal(runtime.getOperations("run").find((operation) => operation.id === "done").status, "completed");
   assert.equal(runtime.getModelAttempts("run")[0].status, "abandoned");
   assert.equal(runtime.getRun("run").status, "failed");
-  runtime.close();
+  await runtime.close();
   rmSync(directory, { recursive: true, force: true });
 });

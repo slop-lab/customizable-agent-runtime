@@ -115,10 +115,10 @@ test("default runtime persists the process worker manifest without projecting it
     assert.equal(manifests[0].manifest.worker.id, "defaults.worker.process-isolated");
     const projected = contexts[1].find((content) => content.type === "tool-result");
     assert.deepEqual(projected, { type: "tool-result", callId: "call", output: "hello runtime", isError: false });
-    runtime.close();
+    await runtime.close();
     runtime = createDefaultRuntime({ provider, workspace: "workspace", workspaceRoot: root,
       workerBackend: "isolated-process", databasePath: join(root, "runtime.sqlite"),
       artifactRoot: join(root, "artifacts") });
     assert.deepEqual(runtime.getRunWorkerExecutionManifests(run.id), manifests);
-  } finally { runtime.close(); rmSync(root, { recursive: true, force: true }); }
+  } finally { await runtime.close(); rmSync(root, { recursive: true, force: true }); }
 });

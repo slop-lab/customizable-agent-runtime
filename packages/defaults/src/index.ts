@@ -193,7 +193,10 @@ export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runti
   };
   const closeResources = [
     ...(worker.close === undefined ? [] : [worker.close.bind(worker)]),
-    ...(options.pluginHost === undefined ? [] : [options.pluginHost.close.bind(options.pluginHost)]),
+    ...(options.pluginHost === undefined ? [] : [async () => {
+      const errors = await options.pluginHost!.close();
+      if (errors.length > 0) throw new AggregateError(errors, "Plugin cleanup failed");
+    }]),
   ];
   return new Runtime(options.provider ?? new FakeProvider(), options.driver ?? new DemoAgentDriver(),
     new ToolDispatcher([...createWorkerTools(worker), ...(options.pluginHost?.tools() ?? [])],

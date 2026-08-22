@@ -24,7 +24,7 @@ test("runtime IDs and timestamps are injectable and model attempts are recorded"
   assert.deepEqual(attempt.usage, { totalTokens: 2 });
   assert.ok(runtime.getContextProjection(attempt.contextProjectionId));
   assert.equal(runtime.getArtifact(attempt.eventArtifactId).status, "completed");
-  runtime.close();
+  await runtime.close();
 });
 
 test("provider failure and its attempt remain inspectable", async () => {
@@ -37,7 +37,7 @@ test("provider failure and its attempt remain inspectable", async () => {
   const [attempt] = runtime.getModelAttempts(run.id);
   assert.equal(attempt.status, "failed");
   assert.equal(attempt.error.code, "provider.failed");
-  runtime.close();
+  await runtime.close();
 });
 
 test("tool dispatch creates a terminal operation and result record", async () => {
@@ -55,7 +55,7 @@ test("tool dispatch creates a terminal operation and result record", async () =>
     { kind: "tool", status: "completed" },
   ]);
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user", "tool-call", "tool-result"]);
-  runtime.close();
+  await runtime.close();
 });
 
 test("tool dispatch validates and persists one worker execution manifest per run lease", async () => {
@@ -82,7 +82,7 @@ test("tool dispatch validates and persists one worker execution manifest per run
   assert.deepEqual(runtime.getRunWorkerExecutionManifests(run.id), [workerExecutionManifest]);
   const operation = runtime.getOperations(run.id).find((value) => value.kind === "tool");
   assert.deepEqual(operation.result, { output: "done" });
-  runtime.close();
+  await runtime.close();
 });
 
 test("cancellation leaves no post-cancel assistant continuation", async () => {
@@ -106,7 +106,7 @@ test("cancellation leaves no post-cancel assistant continuation", async () => {
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user"]);
   assert.deepEqual(runtime.getModelAttempts(run.id).map((attempt) => attempt.status), ["cancelled"]);
   assert.equal(runtime.getModelAttempts(run.id)[0].error.code, "provider.cancelled");
-  runtime.close();
+  await runtime.close();
 });
 
 test("cancellation during a tool leaves no post-cancel tool result continuation", async () => {
@@ -134,7 +134,7 @@ test("cancellation during a tool leaves no post-cancel tool result continuation"
     { kind: "run", status: "cancelled" }, { kind: "model", status: "completed" },
     { kind: "tool", status: "cancelled" },
   ]);
-  runtime.close();
+  await runtime.close();
 });
 
 test("a driver can make tool failure terminal without changing runtime policy", async () => {
@@ -156,5 +156,20 @@ test("a driver can make tool failure terminal without changing runtime policy", 
   assert.deepEqual(runtime.getOperations(run.id).map(({ kind, status }) => ({ kind, status })), [
     { kind: "run", status: "failed" }, { kind: "model", status: "completed" }, { kind: "tool", status: "failed" },
   ]);
-  runtime.close();
+  await runtime.close();
+});
+
+test("runtime close awaits every resource and reports aggregate cleanup failure", async () => {
+  const log = [];
+  const runtime = createTestRuntime(providerFrom(async () => ({ content: [] })), [], {
+    closeResources: [
+      async () => { await Promise.resolve(); log.push("first"); throw new Error("first failed"); },
+      () => { log.push("second"); },
+    ],
+  });
+  await assert.rejects(() => runtime.close(), (error) => error instanceof AggregateError &&
+    error.errors.length === 1 && error.errors[0].message === "first failed");
+  assert.deepEqual(log, ["first", "second"]);
+  await assert.rejects(() => runtime.close(), AggregateError);
+  assert.deepEqual(log, ["first", "second"]);
 });

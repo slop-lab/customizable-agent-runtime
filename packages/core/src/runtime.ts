@@ -53,7 +53,7 @@ export interface RuntimeOptions {
   readonly redactor?: TraceRedactor;
   readonly provenance?: RuntimeProvenanceOptions;
   readonly artifactIngress?: ArtifactIngressStore;
-  readonly closeResources?: readonly (() => void)[];
+  readonly closeResources?: readonly (() => void | Promise<void>)[];
 }
 
 export interface RunExecution {
@@ -75,9 +75,10 @@ export class Runtime {
   readonly #toolTimeoutMs: number;
   readonly #redactor: TraceRedactor;
   readonly #provenance: RunProvenanceEnvironment;
-  readonly #closeResources: readonly (() => void)[];
+  readonly #closeResources: readonly (() => void | Promise<void>)[];
   readonly #projector = new DefaultContextProjector();
   #closed = false;
+  #closePromise: Promise<void> | undefined;
 
   constructor(
     private readonly provider: ModelProvider,
@@ -213,13 +214,25 @@ export class Runtime {
     } finally { this.#controllers.delete(started.run.id); }
   }
 
-  close(): void {
+  close(): Promise<void> {
+    this.#closePromise ??= this.#close();
+    return this.#closePromise;
+  }
+
+  async #close(): Promise<void> {
     if (this.#closed) return;
     this.#closed = true;
+    const errors: unknown[] = [];
     for (const controller of this.#controllers.values()) controller.abort(new Error("Runtime closed"));
-    for (const close of this.#closeResources) close();
-    this.#database.close();
-    if (this.#temporaryArtifactRoot) rmSync(this.#temporaryArtifactRoot, { recursive: true, force: true });
+    for (const close of this.#closeResources) {
+      try { await close(); } catch (error) { errors.push(error); }
+    }
+    try { this.#database.close(); } catch (error) { errors.push(error); }
+    if (this.#temporaryArtifactRoot) {
+      try { rmSync(this.#temporaryArtifactRoot, { recursive: true, force: true }); }
+      catch (error) { errors.push(error); }
+    }
+    if (errors.length > 0) throw new AggregateError(errors, "Runtime cleanup failed");
   }
 
   async #startRun(sessionId: string, input: string): Promise<{ run: Run; operation: Operation }> {

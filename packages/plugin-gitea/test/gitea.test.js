@@ -33,7 +33,7 @@ test("Gitea plugin exposes namespaced read-only tools with bounded projections",
   assert.deepEqual(paths, ["/repos/dim%20org/car", "/repos/dim%20org/car/pulls/7"]);
   assert.deepEqual(host.identities(), [{ id: "integration.gitea", version: "1", dependencies: [],
     configuration: { baseUrl: "https://gitea.test", credentialHandle: "env:GITEA_TOKEN" } }]);
-  host.close();
+  await host.close();
 });
 
 test("Gitea fetch transport resolves credentials only at request time", async () => {
@@ -75,5 +75,5 @@ test("Gitea tools reject oversized, traversal-shaped, and additional input", asy
   await assert.rejects(() => dispatcher.dispatch("integration.gitea.pull.get",
     { owner: "dim", repository: "car", index: 1, extra: true }, context),
   (error) => error.code === "validation");
-  host.close();
+  await host.close();
 });

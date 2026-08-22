@@ -26,7 +26,7 @@ export interface RuntimePlugin {
   setup(registrar: PluginRegistrar): void | Promise<void>;
   start?(): void | Promise<void>;
   health?(signal: AbortSignal): PluginHealth | Promise<PluginHealth>;
-  stop?(): void;
+  stop?(): void | Promise<void>;
 }
 
 export interface PluginInspection {
@@ -53,6 +53,7 @@ export class PluginHost {
   readonly #middleware: readonly ToolMiddleware[];
   readonly #healthTimeoutMs: number;
   #closed = false;
+  #closePromise: Promise<readonly Error[]> | undefined;
 
   private constructor(entries: readonly PluginEntry[], tools: readonly Tool[], middleware: readonly ToolMiddleware[],
     options: PluginHostOptions) {
@@ -111,7 +112,7 @@ export class PluginHost {
       }
       return new PluginHost(entries, tools, middleware, options);
     } catch (error) {
-      stopEntries(entries);
+      await stopEntries(entries);
       const message = error instanceof Error ? error.message : String(error);
       throw error instanceof RuntimeError ? error : new RuntimeError("internal", `Plugin initialization failed: ${message}`);
     }
@@ -141,7 +142,12 @@ export class PluginHost {
     }));
   }
 
-  close(): readonly Error[] {
+  close(): Promise<readonly Error[]> {
+    this.#closePromise ??= this.#close();
+    return this.#closePromise;
+  }
+
+  async #close(): Promise<readonly Error[]> {
     if (this.#closed) return [];
     this.#closed = true;
     return stopEntries(this.#entries);
@@ -203,11 +209,11 @@ function validatePluginTool(pluginId: string, tool: Tool): void {
   }
 }
 
-function stopEntries(entries: readonly PluginEntry[]): readonly Error[] {
+async function stopEntries(entries: readonly PluginEntry[]): Promise<readonly Error[]> {
   const errors: Error[] = [];
   for (const entry of [...entries].reverse()) {
     entry.state = "stopped";
-    try { entry.plugin.stop?.(); }
+    try { await entry.plugin.stop?.(); }
     catch (error) { errors.push(error instanceof Error ? error : new Error(String(error))); }
   }
   return errors;

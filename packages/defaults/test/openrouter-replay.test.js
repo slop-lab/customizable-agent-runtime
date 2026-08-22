@@ -44,7 +44,7 @@ test("OpenRouter tool-loop fixture drives the durable runtime and preserves ever
     ["user", "tool-call", "provider-native", "tool-result", "assistant", "provider-native"]);
   const attempts = runtime.getModelAttempts(run.id); assert.equal(attempts.length, 2);
   assert.deepEqual(attempts.map((attempt) => runtime.readArtifact(attempt.eventArtifactId).trim().split("\n").length), [2, 2]);
-  replay.assertConsumed(); runtime.close();
+  replay.assertConsumed(); await runtime.close();
 });
 
 test("OpenRouter replay keeps 5xx retryable and 429 terminal", async () => {
@@ -55,7 +55,7 @@ test("OpenRouter replay keeps 5xx retryable and 429 terminal", async () => {
   assert.equal(run.status, "completed");
   assert.deepEqual(runtime.getModelAttempts(run.id).map((attempt) => attempt.status), ["failed", "completed"]);
   assert.equal(runtime.getModelAttempts(run.id)[1].retryOfAttemptId, runtime.getModelAttempts(run.id)[0].id);
-  retryReplay.assertConsumed(); runtime.close();
+  retryReplay.assertConsumed(); await runtime.close();
 
   const limitedFixture = await openRouterFixture("terminal-429"); const limitedReplay = replayFetch(limitedFixture);
   runtime = createDefaultRuntime({ provider: providerWithReplay(limitedReplay),
@@ -63,7 +63,7 @@ test("OpenRouter replay keeps 5xx retryable and 429 terminal", async () => {
   session = await runtime.createSession("limited-session"); run = await runtime.run(session.id, "limited");
   assert.equal(run.status, "failed"); assert.equal(runtime.getModelAttempts(run.id).length, 1);
   assert.equal(runtime.getModelAttempts(run.id)[0].error.code, "openrouter.http.429");
-  limitedReplay.assertConsumed(); runtime.close();
+  limitedReplay.assertConsumed(); await runtime.close();
 });
 
 test("OpenRouter malformed arguments and cancellation replay as inspectable terminal attempts", async () => {
@@ -72,7 +72,7 @@ test("OpenRouter malformed arguments and cancellation replay as inspectable term
   let session = await runtime.createSession("malformed-session"); let run = await runtime.run(session.id, "malformed");
   assert.equal(run.status, "failed");
   assert.equal(runtime.getModelAttempts(run.id)[0].error.code, "openrouter.invalid-tool-arguments");
-  malformedReplay.assertConsumed(); runtime.close();
+  malformedReplay.assertConsumed(); await runtime.close();
 
   const cancellationFixture = await openRouterFixture("cancellation"); const cancellationReplay = replayFetch(cancellationFixture);
   runtime = createDefaultRuntime({ provider: providerWithReplay(cancellationReplay) });
@@ -81,7 +81,7 @@ test("OpenRouter malformed arguments and cancellation replay as inspectable term
   execution.cancel(); run = await execution.completion;
   assert.equal(run.status, "cancelled"); assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user"]);
   assert.equal(runtime.getModelAttempts(run.id)[0].status, "cancelled");
-  cancellationReplay.assertConsumed(); runtime.close();
+  cancellationReplay.assertConsumed(); await runtime.close();
 });
 
 test("committed OpenRouter fixtures contain no credential-shaped values", async () => {

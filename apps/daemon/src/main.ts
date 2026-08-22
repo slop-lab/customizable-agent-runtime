@@ -27,7 +27,7 @@ try {
     artifactRoot: join(dataDirectory, "artifacts"), workspaceRoot: repositoryRoot,
     workerBackend, provider, provenance, pluginHost });
 } catch (error) {
-  pluginHost.close();
+  await pluginHost.close();
   throw error;
 }
 const host = process.env.CAR_HOST ?? "127.0.0.1";
@@ -229,9 +229,12 @@ server.listen(port, host, () => {
 });
 
 function shutdown() {
-  server.close(() => {
-    runtime.close();
-    process.exitCode = 0;
+  server.close(async () => {
+    try { await runtime.close(); process.exitCode = 0; }
+    catch (error) {
+      process.stderr.write(`CAR daemon cleanup failed: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    }
   });
 }
 process.once("SIGINT", shutdown);

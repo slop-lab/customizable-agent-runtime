@@ -12,11 +12,11 @@ test("runtime source revision is host-injected through a provenance option", () 
   });
 });
 
-test("default runtime exposes the complete development workspace tool set", () => {
+test("default runtime exposes the complete development workspace tool set", async () => {
   const runtime = createDefaultRuntime({ worker: new FakeWorker(() => ({ ok: true, output: "unused" })) });
   assert.deepEqual(runtime.capabilities().tools.map((tool) => tool.name),
     ["read", "list", "search", "write", "apply_patch", "shell", "git_status"]);
-  runtime.close();
+  await runtime.close();
 });
 
 test("default runtime exposes plugin tools, identity, provenance, and cleanup", async () => {
@@ -56,7 +56,7 @@ test("default runtime exposes plugin tools, identity, provenance, and cleanup", 
   const provenance = runtime.getRunProvenance(run.id);
   assert.deepEqual(provenance.manifest.plugins, [{ id: "integration.example", version: "1", dependencies: [],
     configuration: { endpoint: "https://example.test", token: "[redacted]" } }]);
-  runtime.close();
+  await runtime.close();
   assert.equal(stopped, 1);
 });
 
@@ -86,7 +86,7 @@ test("demo driver completes a model-tool-model loop with durable attempts", asyn
   assert.equal(contexts[1].some((content) => content.type === "tool-result" && content.output === "hello"), true);
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind),
     ["user", "tool-call", "tool-result", "assistant"]);
-  runtime.close();
+  await runtime.close();
 });
 
 test("demo driver records every retry decision and eventual success", async () => {
@@ -103,7 +103,7 @@ test("demo driver records every retry decision and eventual success", async () =
   assert.deepEqual(attempts.map((attempt) => attempt.status), ["failed", "completed"]);
   assert.deepEqual(attempts[0].retryDecision, { retry: true, reason: "temporary", retryNumber: 1, backoffMs: 250 });
   assert.equal(attempts[1].retryOfAttemptId, attempts[0].id);
-  runtime.close();
+  await runtime.close();
 });
 
 test("demo driver does not schedule a retry after cancellation wins a provider race", async () => {
@@ -127,7 +127,7 @@ test("demo driver does not schedule a retry after cancellation wins a provider r
   assert.equal(runtime.getModelAttempts(run.id).length, 1);
   assert.equal(runtime.getModelAttempts(run.id)[0].retryDecision, undefined);
   assert.equal(runtime.getModelAttempts(run.id)[0].error.code, "provider.cancelled");
-  runtime.close();
+  await runtime.close();
 });
 
 test("demo driver cancellation during retry backoff starts no additional attempt", async () => {
@@ -152,7 +152,7 @@ test("demo driver cancellation during retry backoff starts no additional attempt
   assert.equal(attempts.length, 1);
   assert.deepEqual(attempts[0].retryDecision,
     { retry: true, reason: "temporary", retryNumber: 1, backoffMs: 250 });
-  runtime.close();
+  await runtime.close();
 });
 
 test("demo driver stops repeated identical tool calls", async () => {
@@ -167,5 +167,5 @@ test("demo driver stops repeated identical tool calls", async () => {
   assert.equal(run.status, "failed");
   assert.match(run.error, /Repeated tool call limit/);
   assert.equal(runtime.getModelAttempts(run.id).length, 3);
-  runtime.close();
+  await runtime.close();
 });

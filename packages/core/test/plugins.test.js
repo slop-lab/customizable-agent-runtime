@@ -18,7 +18,11 @@ function plugin(id, options = {}) {
     },
     async start() { options.log?.push(`start:${id}`); if (options.startError) throw new Error(options.startError); },
     health: options.health,
-    stop() { options.log?.push(`stop:${id}`); if (options.stopError) throw new Error(options.stopError); },
+    async stop() {
+      options.log?.push(`stop:${id}`);
+      if (options.stopDelay) await options.stopDelay();
+      if (options.stopError) throw new Error(options.stopError);
+    },
   };
 }
 
@@ -41,9 +45,9 @@ test("plugin host orders dependencies deterministically and closes them in rever
   assert.equal(host.identities()[0].configuration.endpoint, "https://original.test");
   assert.throws(() => captured.registerTool(tool("integration.alpha.late")),
     (error) => error instanceof RuntimeError && error.code === "conflict");
-  assert.deepEqual(host.close(), []);
+  assert.deepEqual(await host.close(), []);
   assert.deepEqual(log.slice(-2), ["stop:integration.zeta", "stop:integration.alpha"]);
-  assert.deepEqual(host.close(), []);
+  assert.deepEqual(await host.close(), []);
 });
 
 test("plugin host rejects invalid graphs and tool namespaces before activation", async () => {
@@ -79,5 +83,19 @@ test("plugin health failures and timeouts are inspectable without failing the ho
   assert.deepEqual(inspection.map((value) => value.health.status), ["failed", "failed"]);
   assert.match(inspection[0].health.message, /health failed/);
   assert.match(inspection[1].health.message, /timed out/);
-  host.close();
+  await host.close();
+});
+
+test("plugin close awaits reverse cleanup and reports every failure", async () => {
+  const log = [];
+  const host = await PluginHost.initialize([
+    plugin("integration.alpha", { log, stopError: "alpha stop failed" }),
+    plugin("integration.beta", { dependencies: ["integration.alpha"], log,
+      stopDelay: async () => { await Promise.resolve(); log.push("stopped:integration.beta"); } }),
+  ]);
+  const errors = await host.close();
+  assert.deepEqual(log.slice(-3), ["stop:integration.beta", "stopped:integration.beta", "stop:integration.alpha"]);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /alpha stop failed/);
+  assert.deepEqual(await host.close(), errors);
 });

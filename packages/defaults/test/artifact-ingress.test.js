@@ -57,7 +57,7 @@ test("large worker output is projected and promoted to an operation-owned artifa
     const record = runtime.getRecords(session.id).find((entry) => entry.kind === "tool-result");
     assert.deepEqual(record.data.artifacts, [reference]);
   } finally {
-    runtime.close();
+    await runtime.close();
     rmSync(directory, { recursive: true, force: true });
   }
 });

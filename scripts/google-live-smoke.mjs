@@ -28,6 +28,6 @@ try {
   process.stdout.write(`${JSON.stringify({ runId: run.id, status: run.status,
     attempts: attempts.length, answer: "@car/workspace" })}\n`);
 } finally {
-  runtime.close();
+  await runtime.close();
   rmSync(directory, { recursive: true, force: true });
 }
