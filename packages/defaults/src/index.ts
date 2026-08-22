@@ -9,11 +9,13 @@ import {
   RuntimeError, ToolDispatcher,
 } from "@car/core";
 import { LocalDevelopmentWorker } from "./local-worker.js";
+import { ProcessIsolatedWorker } from "./isolated-worker.js";
 import { EnvironmentCredentialResolver } from "./credentials.js";
 import { GoogleFetchInteractionsTransport, GoogleInteractionsProvider } from "./google-provider.js";
 import { OpenRouterChatProvider, OpenRouterFetchTransport } from "./openrouter-provider.js";
 
 export { LocalDevelopmentWorker } from "./local-worker.js";
+export { ProcessIsolatedWorker, type ProcessIsolatedWorkerOptions } from "./isolated-worker.js";
 export * from "./credentials.js";
 export * from "./google-provider.js";
 export * from "./openrouter-provider.js";
@@ -126,6 +128,10 @@ export interface DefaultRuntimeOptions {
   readonly workspaceRoot?: string;
   readonly workspace?: WorkspaceHandle;
   readonly worker?: ExecutionWorker;
+  readonly workerBackend?: "local" | "isolated-process";
+  readonly workerLeaseTtlMs?: number;
+  readonly maximumInlineOutputBytes?: number;
+  readonly maximumArtifactBytes?: number;
   readonly provider?: ModelProvider;
   readonly driver?: AgentDriver;
   readonly provenance?: RuntimeProvenanceOptions;
@@ -164,9 +170,20 @@ export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runti
   const workspace = options.workspace ?? "default" as WorkspaceHandle;
   const artifactIngressRoot = options.artifactIngressRoot ?? (options.artifactRoot === undefined
     ? undefined : join(dirname(options.artifactRoot), "worker-ingress"));
-  const artifactIngress = artifactIngressRoot === undefined ? undefined : new ArtifactIngressStore(artifactIngressRoot);
-  const worker = options.worker ?? new LocalDevelopmentWorker({ workspace, root: options.workspaceRoot ?? process.cwd(),
-    ...(artifactIngress === undefined ? {} : { artifactIngress }) });
+  const artifactIngress = artifactIngressRoot === undefined ? undefined : new ArtifactIngressStore(artifactIngressRoot,
+    options.maximumArtifactBytes ?? 16 * 1024 * 1024);
+  const worker: ExecutionWorker = options.worker ?? (options.workerBackend === "isolated-process"
+    ? new ProcessIsolatedWorker({ workspace, root: options.workspaceRoot ?? process.cwd(),
+      ...(artifactIngress === undefined ? {} : { artifactIngress }),
+      ...(options.workerLeaseTtlMs === undefined ? {} : { leaseTtlMs: options.workerLeaseTtlMs }),
+      ...(options.maximumInlineOutputBytes === undefined ? {} : {
+        maximumInlineOutputBytes: options.maximumInlineOutputBytes,
+      }),
+      ...(options.maximumArtifactBytes === undefined ? {} : { maximumArtifactBytes: options.maximumArtifactBytes }) })
+    : new LocalDevelopmentWorker({ workspace, root: options.workspaceRoot ?? process.cwd(),
+      ...(artifactIngress === undefined ? {} : { artifactIngress }),
+      ...(options.maximumInlineOutputBytes === undefined ? {} : { maxOutputBytes: options.maximumInlineOutputBytes }),
+      ...(options.maximumArtifactBytes === undefined ? {} : { maxArtifactBytes: options.maximumArtifactBytes }) }));
   const provenance: RuntimeProvenanceOptions = {
     ...(options.provenance ?? {}),
     ...(options.provenance?.worker !== undefined || worker.identity === undefined ? {} : { worker: worker.identity }),
@@ -178,6 +195,7 @@ export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runti
       ...(options.databasePath === undefined ? {} : { database: new KernelDatabase(options.databasePath) }),
       ...(options.artifactRoot === undefined ? {} : { artifactStore: new ArtifactStore(options.artifactRoot) }),
       ...(artifactIngress === undefined ? {} : { artifactIngress }),
+      ...(worker.close === undefined ? {} : { closeResources: [worker.close.bind(worker)] }),
       provenance,
     });
 }
@@ -264,7 +282,9 @@ function toolResult(response: WorkerResponse) {
     ...(response.lease === undefined ? {} : { workerLease: response.lease }),
     ...(response.executionManifest === undefined ? {} : { workerExecutionManifest: response.executionManifest }) };
   throw new RuntimeError(response.code === "cancelled" ? "cancelled" : "internal", response.message,
-    { workerCode: response.code, uncertain: response.uncertain ?? false });
+    { workerCode: response.code, uncertain: response.uncertain ?? false,
+      ...(response.lease === undefined ? {} : { workerLease: response.lease }),
+      ...(response.executionManifest === undefined ? {} : { workerExecutionManifest: response.executionManifest }) });
 }
 function isPathInput(input: unknown): input is { path: string } {
   return typeof input === "object" && input !== null && "path" in input && typeof (input as { path?: unknown }).path === "string";

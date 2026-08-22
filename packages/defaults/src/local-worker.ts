@@ -27,7 +27,10 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
   constructor(private readonly options: LocalWorkerOptions) {
     this.#root = realpath(options.root);
     this.#maxOutputBytes = options.maxOutputBytes ?? 1_048_576;
-    this.#maxArtifactBytes = options.maxArtifactBytes ?? 16 * 1024 * 1024;
+    this.#maxArtifactBytes = options.maxArtifactBytes ?? options.artifactIngress?.maximumBytes ?? 16 * 1024 * 1024;
+    if (options.artifactIngress !== undefined && this.#maxArtifactBytes > options.artifactIngress.maximumBytes) {
+      throw new Error("Worker artifact limit exceeds the ingress-store limit");
+    }
     this.#environment = options.environment ?? { PATH: process.env.PATH ?? "/usr/bin:/bin", LANG: "C.UTF-8" };
   }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { ProviderInvocationError } from "../dist/index.js";
+import { createWorkerExecutionManifest, ProviderInvocationError } from "../dist/index.js";
 import { appendOneTurnDriver, createTestRuntime, providerFrom } from "./agent-fixtures.js";
 
 function deterministicSystem() {
@@ -55,6 +55,33 @@ test("tool dispatch creates a terminal operation and result record", async () =>
     { kind: "tool", status: "completed" },
   ]);
   assert.deepEqual(runtime.getRecords(session.id).map((record) => record.kind), ["user", "tool-call", "tool-result"]);
+  runtime.close();
+});
+
+test("tool dispatch validates and persists one worker execution manifest per run lease", async () => {
+  const provider = providerFrom(async () => ({ content: [
+    { type: "tool-call", callId: "call", toolName: "effect", input: {} },
+  ] }));
+  const startedAt = "2026-08-21T00:00:00.000Z";
+  const lease = { id: "lease-1", acquiredAt: startedAt, expiresAt: "2026-08-21T00:01:00.000Z" };
+  const workerExecutionManifest = createWorkerExecutionManifest({ version: 1,
+    worker: { id: "test.worker.process", version: "1" }, leaseId: lease.id, startedAt,
+    runtime: { name: "node", version: "v24.0.0", platform: "linux", architecture: "x64" },
+    workspace: { handle: "default" }, environment: { keys: ["PATH"] },
+    isolation: { kind: "process", filesystem: "workspace-scoped", environment: "explicit-projection" },
+    resourceLimits: { maximumInlineOutputBytes: 1_024, maximumArtifactBytes: 4_096 },
+    requestTypes: ["readFile"],
+  });
+  const tool = { description: { name: "effect", description: "effect" }, async execute() {
+    return { output: "done", workerLease: lease, workerExecutionManifest };
+  } };
+  const runtime = createTestRuntime(provider, [tool], { system: deterministicSystem() });
+  const session = await runtime.createSession("create-session");
+  const run = await runtime.run(session.id, "hello");
+  assert.equal(run.status, "completed");
+  assert.deepEqual(runtime.getRunWorkerExecutionManifests(run.id), [workerExecutionManifest]);
+  const operation = runtime.getOperations(run.id).find((value) => value.kind === "tool");
+  assert.deepEqual(operation.result, { output: "done" });
   runtime.close();
 });
 

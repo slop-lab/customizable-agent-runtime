@@ -8,7 +8,7 @@ import type { KernelDatabase } from "./storage.js";
 import type { ArtifactMetadata } from "./artifacts.js";
 import type { ContextProjection, ModelAttempt, ModelAttemptStatus } from "./agent-contracts.js";
 import type { UsageAttempt, UsageFilter } from "./usage.js";
-import type { StoredRunProvenance } from "./provenance.js";
+import type { StoredRunProvenance, StoredWorkerExecutionManifest } from "./provenance.js";
 
 type Row = Readonly<Record<string, unknown>>;
 export interface PendingEvent extends RuntimeEvent { readonly sequence: number }
@@ -84,6 +84,12 @@ export class RuntimeRepository {
       manifestHash: String(row.manifest_sha256), createdAt: String(row.created_at) } : undefined;
   }
 
+  listRunWorkerExecutionManifests(runId: string): readonly StoredWorkerExecutionManifest[] {
+    const rows = this.database.db.prepare(`SELECT lease_id, manifest_json, manifest_sha256, created_at
+      FROM run_worker_execution_manifests WHERE run_id = ? ORDER BY created_at, lease_id`).all(runId) as Row[];
+    return rows.map(workerExecutionManifestFromRow);
+  }
+
   listRuns(sessionId: string, limit: number): readonly RunSummary[] {
     const rows = this.database.db.prepare(`SELECT id, session_id, status, started_at, ended_at, error
       FROM runs WHERE session_id = ? ORDER BY started_at DESC, id DESC LIMIT ?`).all(sessionId, limit) as Row[];
@@ -124,9 +130,15 @@ export class RuntimeRepository {
   }
 
   finishOperation(id: string, status: OperationStatus, now: string, event: RuntimeEvent,
-    result?: unknown, error?: string, artifacts: readonly ArtifactMetadata[] = []): Operation {
+    result?: unknown, error?: string, artifacts: readonly ArtifactMetadata[] = [],
+    workerExecutionManifest?: StoredWorkerExecutionManifest): Operation {
     return this.database.transaction(() => {
       for (const artifact of artifacts) this.saveArtifact(artifact);
+      if (workerExecutionManifest !== undefined) {
+        const operation = this.getOperation(id);
+        if (operation === undefined) throw new RuntimeError("not-found", `Unknown operation: ${id}`);
+        this.saveRunWorkerExecutionManifest(operation.runId, id, workerExecutionManifest);
+      }
       const operation = this.transitionOperation(id, status, now, result, error);
       this.appendEvent(event);
       return operation;
@@ -212,6 +224,21 @@ export class RuntimeRepository {
   getArtifact(id: string): ArtifactMetadata | undefined {
     const row = this.database.db.prepare("SELECT * FROM artifacts WHERE id = ?").get(id) as Row | undefined;
     return row ? artifactFromRow(row) : undefined;
+  }
+
+  saveRunWorkerExecutionManifest(runId: string, operationId: string, value: StoredWorkerExecutionManifest): void {
+    const existing = this.database.db.prepare(`SELECT manifest_sha256 FROM run_worker_execution_manifests
+      WHERE run_id = ? AND lease_id = ?`).get(runId, value.leaseId) as Row | undefined;
+    if (existing !== undefined) {
+      if (String(existing.manifest_sha256) !== value.manifestHash) {
+        throw new RuntimeError("conflict", `Worker execution manifest changed for lease: ${value.leaseId}`);
+      }
+      return;
+    }
+    this.database.db.prepare(`INSERT INTO run_worker_execution_manifests(
+      run_id, lease_id, operation_id, version, manifest_json, manifest_sha256, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(runId, value.leaseId, operationId, value.manifest.version,
+      JSON.stringify(value.manifest), value.manifestHash, value.createdAt);
   }
 
   saveContextProjection(value: ContextProjection): void {
@@ -333,6 +360,11 @@ function artifactFromRow(row: Row): ArtifactMetadata {
       type: String(row.owner_type) as NonNullable<ArtifactMetadata["ownership"]>["type"],
       id: String(row.owner_id), runId: String(row.run_id),
     } }) };
+}
+function workerExecutionManifestFromRow(row: Row): StoredWorkerExecutionManifest {
+  return { leaseId: String(row.lease_id),
+    manifest: JSON.parse(String(row.manifest_json)) as StoredWorkerExecutionManifest["manifest"],
+    manifestHash: String(row.manifest_sha256), createdAt: String(row.created_at) };
 }
 function contextFromRow(row: Row): ContextProjection {
   return { id: String(row.id), runId: String(row.run_id), projectorId: String(row.projector_id),

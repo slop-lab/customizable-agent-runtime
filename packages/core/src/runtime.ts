@@ -31,6 +31,8 @@ import {
   type RunProvenanceEnvironment,
   type RuntimeComponentIdentity,
   type StoredRunProvenance,
+  type StoredWorkerExecutionManifest,
+  hashCanonicalJson,
 } from "./provenance.js";
 
 export interface RuntimeProvenanceOptions {
@@ -49,6 +51,7 @@ export interface RuntimeOptions {
   readonly redactor?: TraceRedactor;
   readonly provenance?: RuntimeProvenanceOptions;
   readonly artifactIngress?: ArtifactIngressStore;
+  readonly closeResources?: readonly (() => void)[];
 }
 
 export interface RunExecution {
@@ -70,7 +73,9 @@ export class Runtime {
   readonly #toolTimeoutMs: number;
   readonly #redactor: TraceRedactor;
   readonly #provenance: RunProvenanceEnvironment;
+  readonly #closeResources: readonly (() => void)[];
   readonly #projector = new DefaultContextProjector();
+  #closed = false;
 
   constructor(
     private readonly provider: ModelProvider,
@@ -87,6 +92,7 @@ export class Runtime {
     this.#workspace = options.workspace ?? "default" as WorkspaceHandle;
     this.#toolTimeoutMs = options.toolTimeoutMs ?? 30_000;
     this.#redactor = options.redactor ?? defaultTraceRedactor;
+    this.#closeResources = options.closeResources ?? [];
     this.#provenance = {
       runtime: options.provenance?.runtime ?? { id: "@car/core", version: "0.0.0" },
       ...(options.provenance?.workspace === undefined ? {} : { workspace: options.provenance.workspace }),
@@ -118,6 +124,9 @@ export class Runtime {
   }
   getRun(id: string): Run | undefined { return this.#repository.getRun(id); }
   getRunProvenance(id: string): StoredRunProvenance | undefined { return this.#repository.getRunProvenance(id); }
+  getRunWorkerExecutionManifests(id: string): readonly StoredWorkerExecutionManifest[] {
+    return this.#repository.listRunWorkerExecutionManifests(id);
+  }
   listRuns(sessionId: string, options: { readonly limit?: number } = {}): readonly RunSummary[] {
     if (!this.getSession(sessionId)) throw new RuntimeError("not-found", `Unknown session: ${sessionId}`);
     return this.#repository.listRuns(sessionId, readLimit(options.limit));
@@ -200,6 +209,10 @@ export class Runtime {
   }
 
   close(): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    for (const controller of this.#controllers.values()) controller.abort(new Error("Runtime closed"));
+    for (const close of this.#closeResources) close();
     this.#database.close();
     if (this.#temporaryArtifactRoot) rmSync(this.#temporaryArtifactRoot, { recursive: true, force: true });
   }
@@ -337,7 +350,7 @@ export class Runtime {
       signal.throwIfAborted();
       const prepared = this.#prepareToolResult(runId, operation.id, dispatched);
       await this.#finishTool(operation, "completed", this.#redactor.redact(prepared.result), undefined,
-        prepared.artifact === undefined ? [] : [prepared.artifact]);
+        prepared.artifact === undefined ? [] : [prepared.artifact], prepared.workerExecutionManifest);
       operationFinished = true;
       signal.throwIfAborted();
       await this.#appendNormalized(sessionId, runId, { type: "tool-result", callId: call.callId,
@@ -346,8 +359,10 @@ export class Runtime {
       return prepared.result;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const workerExecutionManifest = workerExecutionManifestFromError(error, this.#workspace);
       if (!operationFinished) {
-        await this.#finishTool(operation, signal.aborted ? "cancelled" : "failed", undefined, message);
+        await this.#finishTool(operation, signal.aborted ? "cancelled" : "failed", undefined, message, [],
+          workerExecutionManifest);
       }
       if (signal.aborted) throw signal.reason ?? new RuntimeError("cancelled", `Tool operation cancelled: ${operation.id}`);
       const result = { output: message, isError: true };
@@ -358,12 +373,14 @@ export class Runtime {
   }
 
   async #finishTool(operation: Operation, status: "completed" | "failed" | "cancelled",
-    result?: unknown, error?: string, artifacts: readonly ArtifactMetadata[] = []): Promise<void> {
+    result?: unknown, error?: string, artifacts: readonly ArtifactMetadata[] = [],
+    workerExecutionManifest?: StoredWorkerExecutionManifest): Promise<void> {
     await this.#database.writer.run(() => {
       const now = this.#system.clock.now();
       this.#repository.finishOperation(operation.id, status, now,
         this.#event("operation.finished", { ...operation, status, endedAt: now,
-          ...(result === undefined ? {} : { result }), ...(error === undefined ? {} : { error }) }), result, error, artifacts);
+          ...(result === undefined ? {} : { result }), ...(error === undefined ? {} : { error }) }), result, error, artifacts,
+        workerExecutionManifest);
     });
     this.#publishPending();
   }
@@ -371,8 +388,14 @@ export class Runtime {
   #prepareToolResult(runId: string, operationId: string, result: ToolResult): {
     readonly result: ToolResult;
     readonly artifact?: ArtifactMetadata;
+    readonly workerExecutionManifest?: StoredWorkerExecutionManifest;
   } {
-    if (result.artifactIngress === undefined) return { result };
+    const workerExecutionManifest = validateWorkerExecutionContext(result, this.#workspace);
+    const base: ToolResult = { output: result.output,
+      ...(result.isError === undefined ? {} : { isError: result.isError }),
+      ...(result.artifacts === undefined ? {} : { artifacts: result.artifacts }) };
+    if (result.artifactIngress === undefined) return { result: base,
+      ...(workerExecutionManifest === undefined ? {} : { workerExecutionManifest }) };
     if (this.#artifactIngress === undefined) {
       throw new RuntimeError("internal", "Worker returned artifact ingress without a configured ingress store");
     }
@@ -384,11 +407,8 @@ export class Runtime {
     const output = `${result.output}${result.output.length === 0 ? "" : "\n"}` +
       `[full output: artifact://${artifact.id} (${artifact.byteLength} bytes)]`;
     return { artifact, result: { output, ...(result.isError === undefined ? {} : { isError: result.isError }),
-      artifacts: [...(result.artifacts ?? []), reference],
-      ...(result.workerLease === undefined ? {} : { workerLease: result.workerLease }),
-      ...(result.workerExecutionManifest === undefined ? {} : {
-        workerExecutionManifest: result.workerExecutionManifest,
-      }) } };
+      artifacts: [...(result.artifacts ?? []), reference] },
+      ...(workerExecutionManifest === undefined ? {} : { workerExecutionManifest }) };
   }
 
   async #append(sessionId: string, runId: string, kind: RecordKind, data: unknown,
@@ -435,4 +455,76 @@ function readLimit(value: number | undefined): number {
     throw new RuntimeError("validation", "Limit must be an integer from 1 through 100");
   }
   return value;
+}
+
+function validateWorkerExecutionContext(result: ToolResult,
+  workspace: WorkspaceHandle): StoredWorkerExecutionManifest | undefined {
+  const lease = result.workerLease;
+  const stored = result.workerExecutionManifest;
+  if (lease === undefined && stored === undefined) return undefined;
+  if (lease === undefined || stored === undefined) {
+    throw new RuntimeError("validation", "Worker lease and execution manifest must be returned together");
+  }
+  assertExactKeys(lease, ["id", "acquiredAt", "expiresAt"], "worker lease");
+  assertExactKeys(stored, ["leaseId", "manifest", "manifestHash", "createdAt"], "stored worker manifest");
+  const manifest = stored.manifest;
+  assertExactKeys(manifest, ["version", "worker", "leaseId", "startedAt", "runtime", "workspace", "environment",
+    "isolation", "resourceLimits", "requestTypes"], "worker execution manifest");
+  assertExactKeys(manifest.worker, ["id", "version"], "worker identity");
+  assertExactKeys(manifest.runtime, ["name", "version", "platform", "architecture"], "worker runtime");
+  assertExactKeys(manifest.workspace, ["handle"], "worker workspace");
+  assertExactKeys(manifest.environment, ["keys"], "worker environment");
+  assertExactKeys(manifest.isolation, ["kind", "filesystem", "environment"], "worker isolation");
+  assertExactKeys(manifest.resourceLimits, ["maximumInlineOutputBytes", "maximumArtifactBytes"],
+    "worker resource limits");
+  if (manifest.version !== 1 || manifest.runtime.name !== "node" || manifest.workspace.handle !== workspace ||
+    manifest.isolation.kind !== "process" || manifest.isolation.filesystem !== "workspace-scoped" ||
+    manifest.isolation.environment !== "explicit-projection" || lease.id !== stored.leaseId ||
+    lease.id !== manifest.leaseId || stored.createdAt !== manifest.startedAt || lease.acquiredAt !== manifest.startedAt ||
+    !validDate(lease.acquiredAt) || !validDate(lease.expiresAt) || Date.parse(lease.expiresAt) <= Date.parse(lease.acquiredAt) ||
+    !nonEmptyString(manifest.worker.id) || !nonEmptyString(manifest.worker.version) ||
+    !nonEmptyString(manifest.runtime.version) || !nonEmptyString(manifest.runtime.platform) ||
+    !nonEmptyString(manifest.runtime.architecture) ||
+    !validPositiveInteger(manifest.resourceLimits.maximumInlineOutputBytes) ||
+    !validPositiveInteger(manifest.resourceLimits.maximumArtifactBytes) ||
+    manifest.resourceLimits.maximumArtifactBytes < manifest.resourceLimits.maximumInlineOutputBytes ||
+    !stringSet(manifest.environment.keys) || !stringSet(manifest.requestTypes) ||
+    !/^[a-f0-9]{64}$/.test(stored.manifestHash) || hashCanonicalJson(manifest) !== stored.manifestHash) {
+    throw new RuntimeError("validation", "Invalid worker execution manifest");
+  }
+  return stored;
+}
+
+function workerExecutionManifestFromError(error: unknown,
+  workspace: WorkspaceHandle): StoredWorkerExecutionManifest | undefined {
+  if (!(error instanceof RuntimeError) || error.details === undefined) return undefined;
+  const workerLease = error.details.workerLease as ToolResult["workerLease"];
+  const workerExecutionManifest = error.details.workerExecutionManifest as ToolResult["workerExecutionManifest"];
+  if (workerLease === undefined && workerExecutionManifest === undefined) return undefined;
+  try { return validateWorkerExecutionContext({ output: "",
+    ...(workerLease === undefined ? {} : { workerLease }),
+    ...(workerExecutionManifest === undefined ? {} : { workerExecutionManifest }) }, workspace); }
+  catch { return undefined; }
+}
+
+function assertExactKeys(value: unknown, expected: readonly string[], label: string): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new RuntimeError("validation", `Invalid ${label}`);
+  }
+  const actual = Object.keys(value).sort();
+  const required = [...expected].sort();
+  if (actual.length !== required.length || actual.some((key, index) => key !== required[index])) {
+    throw new RuntimeError("validation", `Invalid ${label} fields`);
+  }
+}
+
+function validDate(value: unknown): value is string {
+  return typeof value === "string" && Number.isFinite(Date.parse(value));
+}
+function nonEmptyString(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+function validPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+function stringSet(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every(nonEmptyString) && new Set(value).size === value.length;
 }

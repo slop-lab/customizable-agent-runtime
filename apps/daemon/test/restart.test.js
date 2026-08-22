@@ -38,6 +38,11 @@ test("daemon recovers persisted session history after a process restart", async 
     ["apply_patch", "git_status", "list", "read", "search", "shell", "write"]);
   assert.equal(provenance.manifestHash.length, 64);
   assert.equal((await fetch(`http://127.0.0.1:${port}/v1/runs/missing/provenance`)).status, 404);
+  const workerManifestsResponse = await fetch(
+    `http://127.0.0.1:${port}/v1/runs/${run.id}/worker-execution-manifests`);
+  assert.equal(workerManifestsResponse.status, 200);
+  assert.deepEqual(await workerManifestsResponse.json(), []);
+  assert.equal((await fetch(`http://127.0.0.1:${port}/v1/runs/missing/worker-execution-manifests`)).status, 404);
   const sessionsResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions?limit=10`);
   assert.equal(sessionsResponse.status, 200);
   const sessions = await sessionsResponse.json();

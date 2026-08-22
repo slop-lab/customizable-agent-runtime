@@ -52,6 +52,21 @@ const schema = `
     error TEXT,
     result_json TEXT
   );
+  CREATE TABLE IF NOT EXISTS run_worker_execution_manifests (
+    run_id TEXT NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
+    lease_id TEXT NOT NULL,
+    operation_id TEXT NOT NULL REFERENCES operations(id),
+    version INTEGER NOT NULL,
+    manifest_json TEXT NOT NULL,
+    manifest_sha256 TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(run_id, lease_id)
+  );
+  CREATE TRIGGER IF NOT EXISTS run_worker_execution_manifests_immutable
+    BEFORE UPDATE ON run_worker_execution_manifests
+    BEGIN
+      SELECT RAISE(ABORT, 'worker execution manifest is immutable');
+    END;
   CREATE TABLE IF NOT EXISTS records (
     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
     id TEXT NOT NULL UNIQUE,
@@ -205,6 +220,11 @@ export class KernelDatabase {
           this.db.exec("ALTER TABLE artifacts ADD COLUMN run_id TEXT REFERENCES runs(id)");
         }
         this.db.prepare("UPDATE schema_metadata SET version = 5 WHERE singleton = 1").run();
+      }
+      const workerManifestVersion = Number((this.db.prepare(
+        "SELECT version FROM schema_metadata WHERE singleton = 1").get() as { version: number }).version);
+      if (workerManifestVersion < 6) {
+        this.db.prepare("UPDATE schema_metadata SET version = 6 WHERE singleton = 1").run();
       }
     });
   }

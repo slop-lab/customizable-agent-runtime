@@ -17,9 +17,16 @@ const dataDirectory = process.env.CAR_DATA_DIR ?? join(repositoryRoot, ".car");
 mkdirSync(dataDirectory, { recursive: true });
 const runtime = createDefaultRuntime({ databasePath: join(dataDirectory, "runtime.sqlite"),
   artifactRoot: join(dataDirectory, "artifacts"), workspaceRoot: repositoryRoot,
+  workerBackend: readWorkerBackend(process.env.CAR_WORKER_BACKEND),
   provider: createProviderFromEnvironment(), provenance: createRuntimeProvenanceFromEnvironment() });
 const host = process.env.CAR_HOST ?? "127.0.0.1";
 const port = Number.parseInt(process.env.CAR_PORT ?? "4317", 10);
+
+function readWorkerBackend(value: string | undefined): "local" | "isolated-process" {
+  if (value === undefined || value === "local") return "local";
+  if (value === "isolated-process") return value;
+  throw new RuntimeError("validation", `Unknown worker backend: ${value}`);
+}
 
 const server = createServer(async (request, response) => {
   try {
@@ -103,6 +110,13 @@ async function route(request: IncomingMessage, response: ServerResponse) {
   if (request.method === "GET" && provenanceMatch?.[1]) {
     const provenance = runtime.getRunProvenance(provenanceMatch[1]);
     send(response, provenance ? 200 : 404, provenance ?? { error: "Run provenance not found" });
+    return;
+  }
+
+  const workerManifestsMatch = /^\/v1\/runs\/([^/]+)\/worker-execution-manifests$/.exec(url.pathname);
+  if (request.method === "GET" && workerManifestsMatch?.[1]) {
+    if (!runtime.getRun(workerManifestsMatch[1])) { send(response, 404, { error: "Run not found" }); return; }
+    send(response, 200, runtime.getRunWorkerExecutionManifests(workerManifestsMatch[1]));
     return;
   }
 
