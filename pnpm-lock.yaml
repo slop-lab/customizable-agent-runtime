@@ -26,6 +26,9 @@ importers:
       '@car/plugin-gitea':
         specifier: workspace:*
         version: link:../../packages/plugin-gitea
+      '@car/plugin-mcp':
+        specifier: workspace:*
+        version: link:../../packages/plugin-mcp
 
   packages/core: {}
 

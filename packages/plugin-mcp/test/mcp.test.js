@@ -60,7 +60,7 @@ test("MCP plugin exposes only allowlisted read-only tools with deterministic nam
   assert.deepEqual(host.identities(), [{ id: "integration.mcp.work", version: "1", dependencies: [],
     configuration: { allowedTools: ["Issues.Get", "search/repositories"], credentialHandle: "env:MCP_TOKEN",
       endpoint: "https://mcp.test/rpc", requireReadOnly: true,
-      limits: { callTimeoutMs: 30_000, connectionTimeoutMs: 10_000, maximumResultBytes: 65_536,
+      limits: { callTimeoutMs: 30_000, connectionTimeoutMs: 10_000, maximumListPages: 8, maximumResultBytes: 65_536,
         maximumSchemaBytes: 65_536, maximumTools: 32 } } }]);
   assert.deepEqual((await host.inspect())[0].health,
     { status: "ready", message: "Connected to remote@2.1" });

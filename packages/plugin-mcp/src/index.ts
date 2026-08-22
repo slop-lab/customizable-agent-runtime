@@ -159,6 +159,7 @@ export interface McpPluginOptions {
   readonly requireReadOnly?: boolean;
   readonly connectionTimeoutMs?: number;
   readonly callTimeoutMs?: number;
+  readonly maximumListPages?: number;
   readonly maximumTools?: number;
   readonly maximumSchemaBytes?: number;
   readonly maximumResultBytes?: number;
@@ -166,7 +167,6 @@ export interface McpPluginOptions {
 
 export interface StreamableHttpMcpPluginOptions extends Omit<McpPluginOptions, "client"> {
   readonly credentials?: CredentialResolver;
-  readonly maximumListPages?: number;
   readonly probeTimeoutMs?: number;
   readonly fetchImplementation?: FetchLike;
 }
@@ -219,6 +219,7 @@ interface ValidatedPluginOptions {
   readonly requireReadOnly: boolean;
   readonly connectionTimeoutMs: number;
   readonly callTimeoutMs: number;
+  readonly maximumListPages: number;
   readonly maximumTools: number;
   readonly maximumSchemaBytes: number;
   readonly maximumResultBytes: number;
@@ -235,6 +236,8 @@ function validatePluginOptions(options: McpPluginOptions): ValidatedPluginOption
     throw new RuntimeError("validation", "MCP credential handle must not be empty");
   }
   const maximumTools = boundedInteger(options.maximumTools, DEFAULT_MAXIMUM_TOOLS, 1, 256, "MCP maximum tools");
+  const maximumListPages = boundedInteger(options.maximumListPages, DEFAULT_MAXIMUM_LIST_PAGES, 1, 64,
+    "MCP maximum list pages");
   const maximumSchemaBytes = boundedInteger(options.maximumSchemaBytes, DEFAULT_MAXIMUM_SCHEMA_BYTES, 1, 1024 * 1024,
     "MCP maximum schema bytes");
   const maximumResultBytes = boundedInteger(options.maximumResultBytes, DEFAULT_MAXIMUM_RESULT_BYTES, 1, 1024 * 1024,
@@ -258,6 +261,7 @@ function validatePluginOptions(options: McpPluginOptions): ValidatedPluginOption
     requireReadOnly,
     connectionTimeoutMs,
     callTimeoutMs,
+    maximumListPages,
     maximumTools,
     maximumSchemaBytes,
     maximumResultBytes,
@@ -266,7 +270,8 @@ function validatePluginOptions(options: McpPluginOptions): ValidatedPluginOption
       ...(options.credentialHandle === undefined ? {} : { credentialHandle: options.credentialHandle }),
       allowedTools,
       requireReadOnly,
-      limits: { maximumTools, maximumSchemaBytes, maximumResultBytes, connectionTimeoutMs, callTimeoutMs },
+      limits: { maximumListPages, maximumTools, maximumSchemaBytes, maximumResultBytes, connectionTimeoutMs,
+        callTimeoutMs },
     },
   };
 }

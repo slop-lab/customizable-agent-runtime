@@ -107,6 +107,60 @@ test("daemon composes explicitly selected Gitea plugin and exposes bounded healt
   }
 });
 
+test("daemon composes one explicitly configured remote MCP plugin", async () => {
+  const dataDirectory = mkdtempSync(join(tmpdir(), "car-daemon-mcp-"));
+  const daemonPort = await availablePort();
+  const observed = [];
+  const mcp = createHttpServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+    const body = chunks.length === 0 ? undefined : JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    observed.push({ method: body?.method, authorization: request.headers.authorization });
+    if (request.method === "GET") { response.writeHead(405); response.end(); return; }
+    if (request.method === "DELETE") { response.writeHead(200); response.end(); return; }
+    if (body.method === "notifications/initialized") { response.writeHead(202); response.end(); return; }
+    if (body.method === "server/discover") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ jsonrpc: "2.0", id: body.id,
+        error: { code: -32601, message: "Method not found" } }));
+      return;
+    }
+    const result = body.method === "initialize"
+      ? { protocolVersion: body.params.protocolVersion, capabilities: { tools: {} },
+        serverInfo: { name: "daemon-fixture", version: "1" } }
+      : body.method === "tools/list"
+        ? { tools: [{ name: "issues.get", description: "Get an issue",
+          inputSchema: { type: "object" }, annotations: { readOnlyHint: true } }] }
+        : body.method === "ping" ? {} : undefined;
+    assert.notEqual(result, undefined, `Unexpected MCP method: ${body.method}`);
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ jsonrpc: "2.0", id: body.id, result }));
+  });
+  await new Promise((resolve) => mcp.listen(0, "127.0.0.1", resolve));
+  const address = mcp.address();
+  assert.equal(typeof address, "object");
+  const daemon = await startDaemon(dataDirectory, daemonPort, { CAR_PLUGINS: "mcp",
+    CAR_MCP_SERVER_ID: "fixture", CAR_MCP_URL: `http://127.0.0.1:${address.port}/mcp`,
+    CAR_MCP_ALLOWED_TOOLS: "issues.get", CAR_MCP_CREDENTIAL_HANDLE: "env:TEST_MCP_TOKEN",
+    TEST_MCP_TOKEN: "mcp-secret" });
+  try {
+    const capabilities = await (await fetch(`http://127.0.0.1:${daemonPort}/v1/capabilities`)).json();
+    assert.deepEqual(capabilities.plugins, [{ id: "integration.mcp.fixture", version: "1", dependencies: [] }]);
+    assert.deepEqual(capabilities.tools.filter((tool) => tool.name.startsWith("integration.mcp."))
+      .map((tool) => tool.name), ["integration.mcp.fixture.issues-get"]);
+    const inspection = await (await fetch(`http://127.0.0.1:${daemonPort}/v1/plugins`)).json();
+    assert.deepEqual(inspection, [{ id: "integration.mcp.fixture", version: "1", dependencies: [], state: "ready",
+      health: { status: "ready", message: "Connected to daemon-fixture@1" } }]);
+    assert.deepEqual(observed.filter((request) => request.method).map((request) => request.method),
+      ["server/discover", "initialize", "notifications/initialized", "tools/list", "ping"]);
+    assert.ok(observed.every((request) => request.authorization === "Bearer mcp-secret"));
+  } finally {
+    await stopDaemon(daemon);
+    await new Promise((resolve, reject) => mcp.close((error) => error ? reject(error) : resolve()));
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
 async function availablePort() {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

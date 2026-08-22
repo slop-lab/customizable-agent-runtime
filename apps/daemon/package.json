@@ -15,6 +15,7 @@
   "dependencies": {
     "@car/core": "workspace:*",
     "@car/defaults": "workspace:*",
-    "@car/plugin-gitea": "workspace:*"
+    "@car/plugin-gitea": "workspace:*",
+    "@car/plugin-mcp": "workspace:*"
   }
 }

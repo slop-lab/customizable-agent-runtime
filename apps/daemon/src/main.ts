@@ -11,6 +11,7 @@ import {
 } from "@car/defaults";
 import { PluginHost, RuntimeError, type RuntimePlugin } from "@car/core";
 import { createGiteaPlugin, GiteaFetchTransport } from "@car/plugin-gitea";
+import { createStreamableHttpMcpPlugin } from "@car/plugin-mcp";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const environmentFile = join(repositoryRoot, ".env");
@@ -44,12 +45,32 @@ function createPluginsFromEnvironment(
 ): readonly RuntimePlugin[] {
   const selected = (environment.CAR_PLUGINS ?? "").split(",").map((value) => value.trim()).filter(Boolean);
   return selected.map((name) => {
-    if (name !== "gitea") throw new RuntimeError("validation", `Unknown plugin: ${name}`);
-    const baseUrl = requiredEnvironment(environment, "CAR_GITEA_URL");
-    const credentialHandle = environment.CAR_GITEA_CREDENTIAL_HANDLE ?? "env:DIM_GIT_TOKEN";
-    const transport = new GiteaFetchTransport(baseUrl, credentialHandle,
-      new EnvironmentCredentialResolver(environment));
-    return createGiteaPlugin({ baseUrl, credentialHandle, transport });
+    if (name === "gitea") {
+      const baseUrl = requiredEnvironment(environment, "CAR_GITEA_URL");
+      const credentialHandle = environment.CAR_GITEA_CREDENTIAL_HANDLE ?? "env:DIM_GIT_TOKEN";
+      const transport = new GiteaFetchTransport(baseUrl, credentialHandle,
+        new EnvironmentCredentialResolver(environment));
+      return createGiteaPlugin({ baseUrl, credentialHandle, transport });
+    }
+    if (name === "mcp") {
+      const credentialHandle = optionalEnvironment(environment, "CAR_MCP_CREDENTIAL_HANDLE");
+      return createStreamableHttpMcpPlugin({
+        serverId: environment.CAR_MCP_SERVER_ID ?? "remote",
+        endpoint: requiredEnvironment(environment, "CAR_MCP_URL"),
+        allowedTools: commaSeparatedEnvironment(environment, "CAR_MCP_ALLOWED_TOOLS"),
+        ...(credentialHandle === undefined ? {} : {
+          credentialHandle,
+          credentials: new EnvironmentCredentialResolver(environment),
+        }),
+        ...optionalInteger(environment, "CAR_MCP_CONNECT_TIMEOUT_MS", "connectionTimeoutMs"),
+        ...optionalInteger(environment, "CAR_MCP_CALL_TIMEOUT_MS", "callTimeoutMs"),
+        ...optionalInteger(environment, "CAR_MCP_MAX_LIST_PAGES", "maximumListPages"),
+        ...optionalInteger(environment, "CAR_MCP_MAX_TOOLS", "maximumTools"),
+        ...optionalInteger(environment, "CAR_MCP_MAX_SCHEMA_BYTES", "maximumSchemaBytes"),
+        ...optionalInteger(environment, "CAR_MCP_MAX_RESULT_BYTES", "maximumResultBytes"),
+      });
+    }
+    throw new RuntimeError("validation", `Unknown plugin: ${name}`);
   });
 }
 
@@ -57,6 +78,28 @@ function requiredEnvironment(environment: Readonly<Record<string, string | undef
   const value = environment[name];
   if (!value) throw new RuntimeError("validation", `Required environment variable is not set: ${name}`);
   return value;
+}
+
+function optionalEnvironment(environment: Readonly<Record<string, string | undefined>>, name: string): string | undefined {
+  const value = environment[name];
+  if (value === undefined) return undefined;
+  if (value.trim().length === 0) throw new RuntimeError("validation", `${name} must not be empty`);
+  return value;
+}
+
+function commaSeparatedEnvironment(environment: Readonly<Record<string, string | undefined>>, name: string): string[] {
+  return requiredEnvironment(environment, name).split(",").map((value) => value.trim()).filter(Boolean);
+}
+
+function optionalInteger(environment: Readonly<Record<string, string | undefined>>, name: string, key: string) {
+  const value = environment[name];
+  if (value === undefined) return {};
+  if (!/^\d+$/.test(value)) throw new RuntimeError("validation", `${name} must be a positive integer`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new RuntimeError("validation", `${name} must be a positive integer`);
+  }
+  return { [key]: parsed };
 }
 
 const server = createServer(async (request, response) => {
