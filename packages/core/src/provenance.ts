@@ -15,10 +15,15 @@ export interface ConfiguredComponentIdentity extends ComponentIdentity {
   readonly configuration?: JsonObject;
 }
 
+export interface ConfiguredPluginIdentity extends ConfiguredComponentIdentity {
+  readonly dependencies: readonly string[];
+}
+
 export interface RunProvenanceEnvironment {
   readonly runtime: RuntimeComponentIdentity;
   readonly workspace?: JsonObject;
   readonly worker?: ConfiguredComponentIdentity;
+  readonly plugins?: readonly ConfiguredPluginIdentity[];
   readonly security: {
     readonly profile: string;
     readonly redactionPolicy: ComponentIdentity;
@@ -48,6 +53,7 @@ export interface RunProvenanceManifestV1 {
     readonly identity?: JsonObject;
   };
   readonly worker?: ConfiguredComponentIdentity;
+  readonly plugins?: readonly ConfiguredPluginIdentity[];
   readonly security: RunProvenanceEnvironment["security"];
 }
 
@@ -146,6 +152,9 @@ export function createRunProvenance(input: CreateRunProvenanceInput): StoredRunP
     ...(input.environment.worker === undefined
       ? {}
       : { worker: input.environment.worker }),
+    ...(input.environment.plugins === undefined ? {} : { plugins: [...input.environment.plugins]
+      .map((plugin) => ({ ...plugin, dependencies: [...plugin.dependencies].sort(compareStrings) }))
+      .sort((left, right) => compareStrings(left.id, right.id)) }),
     security: input.environment.security,
   }, input.redact);
   return {

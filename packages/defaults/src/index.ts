@@ -1,7 +1,7 @@
 import { dirname, join } from "node:path";
 import type {
   AgentDriver, DriverContext, ExecutionWorker, JsonObject, ModelInvocationRequest, ModelProvider,
-  ProviderCapabilitiesV1, ProviderProfile, ProviderTurn, RuntimeProvenanceOptions, RuntimeSystem, Tool,
+  PluginHost, ProviderCapabilitiesV1, ProviderProfile, ProviderTurn, RuntimeProvenanceOptions, RuntimeSystem, Tool,
   WorkerResponse, WorkspaceHandle,
 } from "@car/core";
 import {
@@ -134,6 +134,7 @@ export interface DefaultRuntimeOptions {
   readonly maximumArtifactBytes?: number;
   readonly provider?: ModelProvider;
   readonly driver?: AgentDriver;
+  readonly pluginHost?: PluginHost;
   readonly provenance?: RuntimeProvenanceOptions;
 }
 
@@ -187,15 +188,22 @@ export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runti
   const provenance: RuntimeProvenanceOptions = {
     ...(options.provenance ?? {}),
     ...(options.provenance?.worker !== undefined || worker.identity === undefined ? {} : { worker: worker.identity }),
+    ...(options.provenance?.plugins !== undefined || options.pluginHost === undefined
+      ? {} : { plugins: options.pluginHost.identities() }),
   };
+  const closeResources = [
+    ...(worker.close === undefined ? [] : [worker.close.bind(worker)]),
+    ...(options.pluginHost === undefined ? [] : [options.pluginHost.close.bind(options.pluginHost)]),
+  ];
   return new Runtime(options.provider ?? new FakeProvider(), options.driver ?? new DemoAgentDriver(),
-    new ToolDispatcher(createWorkerTools(worker)), {
+    new ToolDispatcher([...createWorkerTools(worker), ...(options.pluginHost?.tools() ?? [])],
+      options.pluginHost?.middleware() ?? []), {
       workspace,
       ...(options.system === undefined ? {} : { system: options.system }),
       ...(options.databasePath === undefined ? {} : { database: new KernelDatabase(options.databasePath) }),
       ...(options.artifactRoot === undefined ? {} : { artifactStore: new ArtifactStore(options.artifactRoot) }),
       ...(artifactIngress === undefined ? {} : { artifactIngress }),
-      ...(worker.close === undefined ? {} : { closeResources: [worker.close.bind(worker)] }),
+      ...(closeResources.length === 0 ? {} : { closeResources }),
       provenance,
     });
 }

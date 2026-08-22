@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FakeWorker, ProviderInvocationError } from "@car/core";
+import { FakeWorker, PluginHost, ProviderInvocationError } from "@car/core";
 import { createDefaultRuntime, createRuntimeProvenanceFromEnvironment, DemoAgentDriver, FakeProvider } from "../dist/index.js";
 
 test("runtime source revision is host-injected through a provenance option", () => {
@@ -17,6 +17,47 @@ test("default runtime exposes the complete development workspace tool set", () =
   assert.deepEqual(runtime.capabilities().tools.map((tool) => tool.name),
     ["read", "list", "search", "write", "apply_patch", "shell", "git_status"]);
   runtime.close();
+});
+
+test("default runtime exposes plugin tools, identity, provenance, and cleanup", async () => {
+  let stopped = 0;
+  const host = await PluginHost.initialize([{
+    manifest: { apiVersion: 1, id: "integration.example", version: "1",
+      configuration: { endpoint: "https://example.test", token: "must-not-survive" } },
+    setup(registrar) {
+      registrar.registerTool({
+        description: { name: "integration.example.lookup", version: "1", description: "lookup" },
+        async execute() { return { output: "plugin result" }; },
+      });
+    },
+    stop() { stopped++; },
+  }]);
+  let invocation = 0;
+  const provider = { id: "plugin-provider", profile: { id: "plugin", provider: "fake", model: "plugin",
+    endpoint: "fake://plugin", credentialHandle: "none" },
+    capabilities: { version: 1, values: { "core.tools.calls": { supported: true } } },
+    async invoke(request) {
+      request.recordRequest({ tools: request.tools }); invocation++;
+      const turn = invocation === 1
+        ? { content: [{ type: "tool-call", callId: "call", toolName: "integration.example.lookup", input: {} }] }
+        : { content: [{ type: "text", role: "assistant", text: "done" }], finishReason: "completed" };
+      request.recordEvent("done", turn); return turn;
+    } };
+  const runtime = createDefaultRuntime({ provider, pluginHost: host,
+    worker: new FakeWorker(() => ({ ok: true, output: "unused" })) });
+  assert.deepEqual(runtime.capabilities().plugins,
+    [{ id: "integration.example", version: "1", dependencies: [] }]);
+  assert.equal(runtime.capabilities().tools.some((tool) => tool.name === "integration.example.lookup"), true);
+  const session = await runtime.createSession("plugin-session");
+  const run = await runtime.run(session.id, "use the plugin");
+  assert.equal(run.status, "completed");
+  assert.equal(runtime.getRecords(session.id).some((record) =>
+    record.kind === "tool-result" && record.data.output === "plugin result"), true);
+  const provenance = runtime.getRunProvenance(run.id);
+  assert.deepEqual(provenance.manifest.plugins, [{ id: "integration.example", version: "1", dependencies: [],
+    configuration: { endpoint: "https://example.test", token: "[redacted]" } }]);
+  runtime.close();
+  assert.equal(stopped, 1);
 });
 
 test("demo driver completes a model-tool-model loop with durable attempts", async () => {

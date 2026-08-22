@@ -28,6 +28,7 @@ import { aggregateUsage, type UsageFilter, type UsageReport } from "./usage.js";
 import {
   createRunProvenance,
   type ConfiguredComponentIdentity,
+  type ConfiguredPluginIdentity,
   type RunProvenanceEnvironment,
   type RuntimeComponentIdentity,
   type StoredRunProvenance,
@@ -39,6 +40,7 @@ export interface RuntimeProvenanceOptions {
   readonly runtime?: RuntimeComponentIdentity;
   readonly workspace?: JsonObject;
   readonly worker?: ConfiguredComponentIdentity;
+  readonly plugins?: readonly ConfiguredPluginIdentity[];
   readonly security?: RunProvenanceEnvironment["security"];
 }
 
@@ -97,6 +99,7 @@ export class Runtime {
       runtime: options.provenance?.runtime ?? { id: "@car/core", version: "0.0.0" },
       ...(options.provenance?.workspace === undefined ? {} : { workspace: options.provenance.workspace }),
       ...(options.provenance?.worker === undefined ? {} : { worker: options.provenance.worker }),
+      ...(options.provenance?.plugins === undefined ? {} : { plugins: options.provenance.plugins }),
       security: options.provenance?.security ?? {
         profile: "local-development",
         redactionPolicy: { id: "core.trace.default", version: "1" },
@@ -157,7 +160,9 @@ export class Runtime {
   capabilities() {
     return { apiVersion: "v1", provider: { id: this.provider.id, profile: this.provider.profile,
       capabilities: this.provider.capabilities }, driver: { id: this.driver.id, version: this.driver.version },
-      tools: this.tools.describe() } as const;
+      tools: this.tools.describe(), plugins: (this.#provenance.plugins ?? []).map((plugin) => ({
+        id: plugin.id, version: plugin.version, dependencies: plugin.dependencies,
+      })) } as const;
   }
 
   subscribe(listener: (event: RuntimeEvent) => void): () => void {
