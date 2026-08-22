@@ -58,6 +58,48 @@ export interface StoredRunProvenance {
   readonly createdAt: string;
 }
 
+export interface WorkerExecutionManifestV1 {
+  readonly version: 1;
+  readonly worker: ComponentIdentity;
+  readonly leaseId: string;
+  readonly startedAt: string;
+  readonly runtime: {
+    readonly name: "node";
+    readonly version: string;
+    readonly platform: string;
+    readonly architecture: string;
+  };
+  readonly workspace: { readonly handle: string };
+  readonly environment: { readonly keys: readonly string[] };
+  readonly isolation: {
+    readonly kind: "process";
+    readonly filesystem: "workspace-scoped";
+    readonly environment: "explicit-projection";
+  };
+  readonly resourceLimits: {
+    readonly maximumInlineOutputBytes: number;
+    readonly maximumArtifactBytes: number;
+  };
+  readonly requestTypes: readonly string[];
+}
+
+export interface StoredWorkerExecutionManifest {
+  readonly leaseId: string;
+  readonly manifest: WorkerExecutionManifestV1;
+  readonly manifestHash: string;
+  readonly createdAt: string;
+}
+
+export function createWorkerExecutionManifest(manifest: WorkerExecutionManifestV1): StoredWorkerExecutionManifest {
+  const normalized: WorkerExecutionManifestV1 = {
+    ...manifest,
+    environment: { keys: [...manifest.environment.keys].sort(compareStrings) },
+    requestTypes: [...manifest.requestTypes].sort(compareStrings),
+  };
+  return { leaseId: normalized.leaseId, manifest: normalized,
+    manifestHash: hashCanonicalJson(normalized), createdAt: normalized.startedAt };
+}
+
 export interface CreateRunProvenanceInput {
   readonly runId: string;
   readonly createdAt: string;

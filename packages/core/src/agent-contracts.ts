@@ -1,12 +1,14 @@
 import type { RecordEntry, ToolDescription, ToolResult } from "./contracts.js";
 import type { ComponentIdentity } from "./provenance.js";
+import type { ArtifactReference } from "./artifacts.js";
 
 export type JsonObject = Readonly<Record<string, unknown>>;
 
 export type NormalizedContent =
   | { readonly type: "text"; readonly role: "system" | "user" | "assistant"; readonly text: string }
   | { readonly type: "tool-call"; readonly callId: string; readonly toolName: string; readonly input: unknown }
-  | { readonly type: "tool-result"; readonly callId: string; readonly output: unknown; readonly isError: boolean }
+  | { readonly type: "tool-result"; readonly callId: string; readonly output: unknown; readonly isError: boolean;
+      readonly artifacts?: readonly ArtifactReference[] }
   | { readonly type: "provider-native"; readonly provider: string; readonly value: unknown };
 
 export type CapabilityValue =

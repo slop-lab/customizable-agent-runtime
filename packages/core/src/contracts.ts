@@ -1,4 +1,7 @@
 import type { WorkspaceHandle } from "./worker.js";
+import type { ArtifactIngressDescriptorV1, ArtifactReference } from "./artifacts.js";
+import type { StoredWorkerExecutionManifest } from "./provenance.js";
+import type { WorkerLease } from "./worker.js";
 
 export type Id = string;
 
@@ -62,6 +65,10 @@ export interface ToolContext {
 export interface ToolResult {
   readonly output: string;
   readonly isError?: boolean;
+  readonly artifactIngress?: ArtifactIngressDescriptorV1;
+  readonly artifacts?: readonly ArtifactReference[];
+  readonly workerLease?: WorkerLease;
+  readonly workerExecutionManifest?: StoredWorkerExecutionManifest;
 }
 
 export interface Tool {
