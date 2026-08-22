@@ -68,6 +68,16 @@ and devices are separate modules.
 
 ## Progressive plugin model
 
+The implemented first slice is deliberately narrower than the target model
+below. A trusted host receives an explicit list of in-process plugins, validates
+versioned manifests and dependency graphs, and allows setup-time registration
+of tools and tool middleware only. Setup/start are sequential in deterministic
+dependency order, cleanup is reverse-order, and health checks are bounded and
+inspectable. There is no scanning, dynamic import/install, hot reload, module
+state, event subscription, provider/context registration, or compatibility
+promise yet. The separate `@car/plugin-gitea` package exercises this seam with
+two read-only tools and a credential-resolving HTTP transport.
+
 Extension levels are configuration; additive tools/providers/context/events/API
 actions; middleware; strategy replacement; out-of-process integration; and
 source modification. Initial semi-public seams are tool/provider registration,
@@ -76,11 +86,12 @@ namespaced actions. Driver replacement may remain internal until validated.
 
 Every in-process plugin is fully trusted. It can access runtime memory and
 control-plane authority, and tool sandboxing does not sandbox plugin code. It
-does not receive direct workspace filesystem access; workspace I/O still uses
-worker capabilities. A future restricted plugin requires an out-of-process or
-WASM boundary and a different contract. Lifecycle covers discovery, config validation,
-initialization, registration, start, health, stop, state migration, and eventual
-reload; daemon restart is acceptable initially.
+does not receive workspace filesystem capability through the current registrar;
+workspace I/O tools still use worker capabilities. A future restricted plugin
+requires an out-of-process or WASM boundary and a different contract. The
+longer-term lifecycle covers discovery, config validation, initialization,
+registration, start, health, stop, state migration, and eventual reload; daemon
+restart is acceptable initially.
 
 Ordering must be deterministic through one documented priority/dependency rule.
 Diagnose duplicate tool/provider IDs, cycles, protocol mismatches, and competing

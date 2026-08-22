@@ -17,6 +17,7 @@ dependencies explicit without committing the project to multiple repositories.
 apps/daemon/          reference network host
 packages/core/        embeddable runtime kernel and contracts
 packages/defaults/    default driver, provider, and tool composition
+packages/plugin-gitea/ trusted read-only Gitea integration
 docs/                 architecture decisions and development notes
 .dim/                 DIM Project lifecycle
 ```
@@ -42,6 +43,7 @@ The daemon binds to `127.0.0.1:4317` by default. Try the initial API:
 
 ```bash
 curl http://127.0.0.1:4317/v1/capabilities
+curl http://127.0.0.1:4317/v1/plugins
 curl -X POST http://127.0.0.1:4317/v1/sessions
 curl http://127.0.0.1:4317/v1/sessions
 curl http://127.0.0.1:4317/v1/usage
@@ -97,6 +99,36 @@ JSON-lines child-process backend. This validates serialization, cancellation,
 lease renewal/expiry, crash recovery, and explicit environment projection, but
 it is **not a security sandbox**: it shares the host user, kernel, filesystem
 visibility available to that user, and inherited network policy.
+
+### Trusted external plugins
+
+The daemon can explicitly compose trusted, in-process plugins. No plugin is
+enabled by default, and this pre-stable host does not scan directories, install
+packages, or isolate plugin code. Plugin tools use the same dispatcher,
+validation, middleware, cancellation, persistence, and provenance path as
+built-in tools. `GET /v1/plugins` runs bounded health checks and returns active
+plugin identity and health without configuration values.
+
+The first integration provides bounded, read-only Gitea repository and pull
+request lookup tools. Configure an opaque credential handle rather than a raw
+token in plugin configuration:
+
+```bash
+export DIM_GIT_TOKEN=YOUR_GITEA_TOKEN
+export CAR_PLUGINS=gitea
+export CAR_GITEA_URL=http://127.0.0.1:3000
+export CAR_GITEA_CREDENTIAL_HANDLE=env:DIM_GIT_TOKEN
+just start
+
+curl http://127.0.0.1:4317/v1/plugins
+curl http://127.0.0.1:4317/v1/capabilities
+```
+
+The transport resolves `DIM_GIT_TOKEN` only when making a Gitea request. The
+token is not included in the plugin manifest, model-visible tool results, or
+run provenance. The two exposed tools are
+`integration.gitea.repository.get` and `integration.gitea.pull.get`; there is
+no generic HTTP escape hatch.
 
 Session/run summaries and normalized provider usage are available without
 discarding the provider-native usage object:

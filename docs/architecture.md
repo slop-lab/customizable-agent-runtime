@@ -8,6 +8,7 @@ clients -> versioned API -> runtime host
                             |-- runtime kernel
                             |-- default distribution
                             |-- modules
+                            |-- trusted plugin host -> integration transports
                             |-- provider adapters -> transports
                             `-- tool dispatcher -> executors
 ```
@@ -22,6 +23,8 @@ is an API client and owns no authoritative runtime state.
 - `@car/core` is embeddable and knows no HTTP, persistence, or vendor SDK.
 - `@car/defaults` composes a useful agent driver and built-in modules from core
   contracts.
+- Trusted integration packages depend on `@car/core` contracts and are
+  explicitly supplied to the host; core does not discover or import them.
 - `@car/daemon` adapts the same in-process API to a versioned network API.
 - Every model-visible tool invocation passes through one dispatcher.
 - Provider adapters and transports are separate contracts.
@@ -49,6 +52,13 @@ process-isolated for lifecycle testing, not sandboxed from the host. Branching,
 suspension, and module state remain planned kernel capabilities. The canonical
 remote protocol will be WebSocket JSON-RPC 2.0; the current small HTTP endpoint
 and its list/usage inspectors are disposable spike code.
+
+The spike now also has a pre-stable trusted plugin host. It validates explicit
+versioned manifests, orders dependencies deterministically, separates setup
+registration from activation, starts sequentially, stops in reverse, and
+projects plugin identities and tool schemas into capabilities and redacted run
+provenance. Its first integration is a separate read-only Gitea package. This
+is a composition boundary, not a sandbox or a public third-party ABI.
 
 ## Provider boundary
 
