@@ -58,7 +58,9 @@ versioned manifests, orders dependencies deterministically, separates setup
 registration from activation, starts sequentially, stops in reverse, and
 projects plugin identities and tool schemas into capabilities and redacted run
 provenance. Its first integration is a separate read-only Gitea package. This
-is a composition boundary, not a sandbox or a public third-party ABI.
+is followed by a bounded remote Streamable HTTP MCP tool adapter with explicit
+allowlisting, catalog/result limits, and asynchronous connection cleanup. Both
+are composition boundaries, not sandboxes or a public third-party ABI.
 
 ## Provider boundary
 

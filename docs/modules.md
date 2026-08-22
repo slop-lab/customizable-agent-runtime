@@ -76,7 +76,9 @@ dependency order, cleanup is reverse-order, and health checks are bounded and
 inspectable. There is no scanning, dynamic import/install, hot reload, module
 state, event subscription, provider/context registration, or compatibility
 promise yet. The separate `@car/plugin-gitea` package exercises this seam with
-two read-only tools and a credential-resolving HTTP transport.
+two read-only tools and a credential-resolving HTTP transport. The
+`@car/plugin-mcp` package adds bounded remote tool discovery and invocation over
+Streamable HTTP while retaining the same dispatcher and provenance path.
 
 Extension levels are configuration; additive tools/providers/context/events/API
 actions; middleware; strategy replacement; out-of-process integration; and

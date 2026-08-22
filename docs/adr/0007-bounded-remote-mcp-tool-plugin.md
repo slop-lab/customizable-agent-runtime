@@ -89,7 +89,7 @@ part of this trusted remote-integration contract.
 
 ## References
 
-- [Official TypeScript client guide](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/client.md)
+- [Official TypeScript client connection guide](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/clients/connect.md)
 - [Official TypeScript SDK v2 migration guide](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/docs/migration/upgrade-to-v2.md)
 - [MCP pagination](https://modelcontextprotocol.io/specification/2025-11-25/server/utilities/pagination)
 - [MCP tool annotation risk vocabulary](https://blog.modelcontextprotocol.io/posts/2026-03-16-tool-annotations/)

@@ -30,7 +30,7 @@ The MVP prioritizes one complete vertical slice over a plugin ecosystem.
 
 ### Should
 
-Branching, compaction, skill compatibility, MCP, approval, a basic web UI and
+Branching, compaction, skill compatibility, broader MCP surfaces, approval, a basic web UI and
 context inspector, discovery provenance, export, record/replay fixtures, and a
 daemon-restart plugin development loop.
 
@@ -66,10 +66,11 @@ the same core through a minimal web or test client without a TUI.
 
 ## Delivery phases
 
-The trusted plugin-host/Gitea validation slice is implemented ahead of broader
-phase 6 work so the dispatcher and credential boundaries are exercised by a
-real external integration. It remains pre-stable and intentionally excludes
-dynamic loading, restricted execution, module state, subscriptions, and reload.
+The trusted plugin-host/Gitea/MCP validation slice is implemented ahead of
+broader phase 6 work so dispatcher, credential, remote discovery, cancellation,
+and asynchronous cleanup boundaries are exercised by real external
+integrations. It remains pre-stable and intentionally excludes dynamic loading,
+restricted execution, module state, subscriptions, and reload.
 
 0. Finalize ADRs for core/daemon, SQLite journal/state/outbox, driver, provider
    and transport, dispatcher/executor, trusted plugins, JSON-RPC, content model,

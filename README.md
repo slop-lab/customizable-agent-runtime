@@ -18,6 +18,7 @@ apps/daemon/          reference network host
 packages/core/        embeddable runtime kernel and contracts
 packages/defaults/    default driver, provider, and tool composition
 packages/plugin-gitea/ trusted read-only Gitea integration
+packages/plugin-mcp/   bounded remote Streamable HTTP MCP tools
 docs/                 architecture decisions and development notes
 .dim/                 DIM Project lifecycle
 ```
@@ -109,9 +110,9 @@ validation, middleware, cancellation, persistence, and provenance path as
 built-in tools. `GET /v1/plugins` runs bounded health checks and returns active
 plugin identity and health without configuration values.
 
-The first integration provides bounded, read-only Gitea repository and pull
-request lookup tools. Configure an opaque credential handle rather than a raw
-token in plugin configuration:
+The Gitea integration provides bounded, read-only repository and pull-request
+lookup tools. Configure an opaque credential handle rather than a raw token in
+plugin configuration:
 
 ```bash
 export DIM_GIT_TOKEN=YOUR_GITEA_TOKEN
@@ -129,6 +130,34 @@ token is not included in the plugin manifest, model-visible tool results, or
 run provenance. The two exposed tools are
 `integration.gitea.repository.get` and `integration.gitea.pull.get`; there is
 no generic HTTP escape hatch.
+
+The MCP integration connects to one explicitly configured remote Streamable
+HTTP server, discovers its tools during startup, and exposes only exact
+allowlisted tools that declare `readOnlyHint: true`. It does not scan local
+configuration, spawn stdio servers, fall back to legacy SSE, run OAuth flows,
+or expose resources and prompts. For example:
+
+```bash
+export MCP_API_TOKEN=YOUR_REMOTE_TOKEN
+export CAR_PLUGINS=mcp
+export CAR_MCP_SERVER_ID=issues
+export CAR_MCP_URL=https://mcp.example.test/rpc
+export CAR_MCP_ALLOWED_TOOLS=issues.get,issues.search
+export CAR_MCP_CREDENTIAL_HANDLE=env:MCP_API_TOKEN
+just start
+```
+
+The resulting model-visible names are deterministic, such as
+`integration.mcp.issues.issues-get`; calls retain the server's original raw
+tool name. Startup fails closed for missing allowlist entries, duplicate or
+normalizing-colliding names, absent read-only hints, excessive catalog pages,
+or excessive schema bytes. Calls carry cancellation and bounded timeouts;
+binary content is reduced to metadata, and oversized projected results fail
+instead of entering model context. The credential value is resolved before
+each HTTP request and only its handle enters provenance. The default bounds
+are 8 catalog pages, 32 listed tools, 64 KiB of selected schemas, a 10-second
+connection timeout, a 30-second call timeout, and 64 KiB of projected output;
+the corresponding `CAR_MCP_*` overrides are listed in `.env.example`.
 
 Session/run summaries and normalized provider usage are available without
 discarding the provider-native usage object:
