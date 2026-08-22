@@ -86,7 +86,7 @@ export class StreamableHttpMcpClient implements McpRemoteClient {
     const credentials = options.credentials;
     this.#transport = new StreamableHTTPClientTransport(new URL(endpoint), {
       ...(credentialHandle === undefined || credentials === undefined ? {} : {
-        authProvider: { token: async () => credentials.resolve(credentialHandle) },
+        authProvider: { token: async () => resolveCredential(credentials, credentialHandle) },
       }),
       ...(options.fetchImplementation === undefined ? {} : { fetch: options.fetchImplementation }),
       onInsufficientScope: "throw",
@@ -317,7 +317,7 @@ function runtimeTool(tool: McpToolDefinition, client: McpRemoteClient, options: 
     description: {
       name: localName,
       version: "1",
-      description: `Call the allowlisted read-only MCP tool ${tool.name}.${remoteDescription ? ` ${remoteDescription}` : ""}`,
+      description: `Call the allowlisted MCP tool ${tool.name}.${remoteDescription ? ` ${remoteDescription}` : ""}`,
       inputSchema: tool.inputSchema,
       validateInput: (input) => plainObject(input) ? undefined : "Expected a JSON object.",
     },
@@ -410,6 +410,15 @@ function plainObject(value: unknown): value is Record<string, unknown> {
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.trim().length > 0; }
 function boundedText(value: unknown, maximum: number): string | undefined {
   return typeof value === "string" && value.length > 0 ? value.slice(0, maximum) : undefined;
+}
+function resolveCredential(credentials: CredentialResolver, handle: string): string {
+  try {
+    const value = credentials.resolve(handle);
+    if (!nonEmpty(value)) throw new Error("empty credential");
+    return value;
+  } catch {
+    throw new RuntimeError("internal", "MCP credential resolution failed");
+  }
 }
 function asError(value: unknown): Error { return value instanceof Error ? value : new Error(String(value)); }
 function compareStrings(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }

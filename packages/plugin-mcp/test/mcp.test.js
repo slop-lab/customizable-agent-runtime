@@ -159,3 +159,12 @@ test("Streamable HTTP adapter rejects endpoints and credential configuration tha
   assert.throws(() => new StreamableHttpMcpClient({ endpoint: "https://mcp.test", credentialHandle: "env:TOKEN" }),
     /resolver is required/);
 });
+
+test("Streamable HTTP adapter rejects unavailable credentials without exposing resolver details", async () => {
+  const client = new StreamableHttpMcpClient({ endpoint: "https://mcp.test", credentialHandle: "env:TOKEN",
+    credentials: { resolve() { throw new Error("secret resolver detail"); } },
+    versionNegotiation: "legacy", fetchImplementation: async () => { throw new Error("must not fetch"); } });
+  await assert.rejects(() => client.connect(new AbortController().signal, 1_000),
+    (error) => /credential resolution failed/.test(error.message) && !/secret resolver detail/.test(error.message));
+  await client.close();
+});
