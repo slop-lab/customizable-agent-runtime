@@ -12,6 +12,7 @@ import {
 import { PluginHost, RuntimeError, type RuntimePlugin } from "@car/core";
 import { createGiteaPlugin, GiteaFetchTransport } from "@car/plugin-gitea";
 import { createStreamableHttpMcpPlugin } from "@car/plugin-mcp";
+import { webUiHtml } from "./web-ui.js";
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const environmentFile = join(repositoryRoot, ".env");
@@ -118,6 +119,10 @@ const server = createServer(async (request, response) => {
 async function route(request: IncomingMessage, response: ServerResponse) {
   const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
 
+  if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
+    sendHtml(response, webUiHtml);
+    return;
+  }
   if (request.method === "GET" && url.pathname === "/health") {
     send(response, 200, { status: "ok" });
     return;
@@ -167,7 +172,11 @@ async function route(request: IncomingMessage, response: ServerResponse) {
       send(response, 400, { error: "Expected JSON body with a string input." });
       return;
     }
-    send(response, 201, await runtime.run(runsMatch[1], body.input));
+    const execution = await runtime.startRun(runsMatch[1], body.input);
+    void execution.completion.catch((error) => {
+      process.stderr.write(`CAR background run failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    });
+    send(response, 202, execution.run);
     return;
   }
 
@@ -263,8 +272,14 @@ function isRunBody(value: unknown): value is { input: string } {
 }
 
 function send(response: ServerResponse, status: number, body: unknown) {
-  response.writeHead(status, { "content-type": "application/json; charset=utf-8" });
+  response.writeHead(status, { "content-type": "application/json; charset=utf-8", "x-content-type-options": "nosniff" });
   response.end(`${JSON.stringify(body)}\n`);
+}
+
+function sendHtml(response: ServerResponse, body: string) {
+  response.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store",
+    "x-content-type-options": "nosniff" });
+  response.end(body);
 }
 
 server.listen(port, host, () => {

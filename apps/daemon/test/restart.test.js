@@ -14,6 +14,10 @@ test("daemon recovers persisted session history after a process restart", async 
   const sessionResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions`, { method: "POST" });
   assert.equal(sessionResponse.status, 201);
   const session = await sessionResponse.json();
+  const webResponse = await fetch(`http://127.0.0.1:${port}/`);
+  assert.equal(webResponse.status, 200);
+  assert.match(webResponse.headers.get("content-type"), /^text\/html/);
+  assert.match(await webResponse.text(), /<title>CAR<\/title>/);
   assert.deepEqual(await (await fetch(`http://127.0.0.1:${port}/v1/plugins`)).json(), []);
   assert.deepEqual((await (await fetch(`http://127.0.0.1:${port}/v1/capabilities`)).json()).plugins, []);
   assert.equal((await fetch(`http://127.0.0.1:${port}/v1/sessions?limit=0`)).status, 400);
@@ -27,8 +31,10 @@ test("daemon recovers persisted session history after a process restart", async 
   const runResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions/${session.id}/runs`, {
     method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ input: "persist me" }),
   });
-  assert.equal(runResponse.status, 201);
-  const run = await runResponse.json();
+  assert.equal(runResponse.status, 202);
+  const acceptedRun = await runResponse.json();
+  assert.equal(acceptedRun.status, "running");
+  const run = await waitForRun(port, acceptedRun.id);
   assert.equal(run.status, "completed");
   const provenanceResponse = await fetch(`http://127.0.0.1:${port}/v1/runs/${run.id}/provenance`);
   assert.equal(provenanceResponse.status, 200);
@@ -195,4 +201,14 @@ async function stopDaemon(child, signal = "SIGTERM") {
     const timeout = setTimeout(() => { child.kill("SIGKILL"); reject(new Error("daemon stop timeout")); }, 5_000);
     child.once("exit", () => { clearTimeout(timeout); resolve(); });
   });
+}
+
+async function waitForRun(port, runId) {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    const run = await (await fetch(`http://127.0.0.1:${port}/v1/runs/${runId}`)).json();
+    if (run.status !== "running") return run;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`run did not finish: ${runId}`);
 }
