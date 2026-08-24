@@ -43,6 +43,8 @@ test("daemon recovers persisted session history after a process restart", async 
   assert.equal(provenance.manifest.worker.id, "defaults.worker.local-development");
   assert.equal(provenance.manifest.driver.configuration.maximumAttempts, 12);
   assert.equal(provenance.manifest.provider.transport.id, "core.transport.in-process");
+  assert.deepEqual(provenance.manifest.contextTransforms.map((transform) => transform.id),
+    ["core.context.old-tool-results"]);
   assert.deepEqual(provenance.manifest.tools.map((tool) => tool.id),
     ["apply_patch", "bash", "edit", "git_diff", "git_status", "glob", "grep", "list", "read", "search",
       "shell", "web_fetch", "write"]);
@@ -63,6 +65,10 @@ test("daemon recovers persisted session history after a process restart", async 
   const runs = await runsResponse.json();
   assert.equal(runs[0].modelRequestCount, 1);
   assert.equal(runs[0].retryCount, 0);
+  const attempts = await (await fetch(`http://127.0.0.1:${port}/v1/runs/${run.id}/attempts`)).json();
+  const projection = await (await fetch(`http://127.0.0.1:${port}/v1/context-projections/${attempts[0].contextProjectionId}`)).json();
+  assert.equal(projection.transformations[0].id, "core.context.old-tool-results");
+  assert.deepEqual(projection.transformations[0].decisions, []);
   const usageResponse = await fetch(`http://127.0.0.1:${port}/v1/usage?sessionId=${session.id}`);
   assert.equal(usageResponse.status, 200);
   const usage = await usageResponse.json();

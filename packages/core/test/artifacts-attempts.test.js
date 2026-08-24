@@ -26,7 +26,9 @@ test("attempts retain context, artifacts, profile, usage, and retry decisions", 
     database.db.prepare("INSERT INTO operations(id, run_id, kind, status, started_at) VALUES ('operation', 'run', 'model', 'running', 'start')").run();
   });
   repository.saveContextProjection({ id: "context", runId: "run", projectorId: "test", projectorVersion: "1",
-    includedRecordIds: [], excludedRecords: [], content: [{ type: "text", role: "user", text: "hello" }], createdAt: "start" });
+    includedRecordIds: [], excludedRecords: [], content: [{ type: "text", role: "user", text: "hello" }],
+    transformations: [{ id: "test.transform", version: "1", inputHash: "in", outputHash: "out", decisions: [] }],
+    createdAt: "start" });
   const profile = { id: "profile", provider: "fake", model: "fake", endpoint: "fake://local", credentialHandle: "none" };
   const capabilities = { version: 1, values: { "core.streaming.text": { supported: true } } };
   repository.createModelAttempt({ id: "attempt", runId: "run", operationId: "operation", attemptNumber: 1,
@@ -40,5 +42,7 @@ test("attempts retain context, artifacts, profile, usage, and retry decisions", 
   assert.deepEqual(attempt.retryDecision, { retry: true, reason: "temporary" });
   assert.deepEqual(attempt.usage, { total_tokens: 3 });
   assert.deepEqual(attempt.normalizedUsage, { version: 1, totalTokens: 3 });
+  assert.deepEqual(repository.getContextProjection("context").transformations,
+    [{ id: "test.transform", version: "1", inputHash: "in", outputHash: "out", decisions: [] }]);
   database.close();
 });

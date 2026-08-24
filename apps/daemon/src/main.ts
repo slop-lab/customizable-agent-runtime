@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   createDefaultRuntime,
+  createContextTransformsFromEnvironment,
   createProviderFromEnvironment,
   createRuntimeProvenanceFromEnvironment,
   EnvironmentCredentialResolver,
@@ -21,13 +22,14 @@ const dataDirectory = process.env.CAR_DATA_DIR ?? join(repositoryRoot, ".car");
 mkdirSync(dataDirectory, { recursive: true });
 const workerBackend = readWorkerBackend(process.env.CAR_WORKER_BACKEND);
 const provider = createProviderFromEnvironment();
+const contextTransforms = createContextTransformsFromEnvironment();
 const provenance = createRuntimeProvenanceFromEnvironment();
 const pluginHost = await PluginHost.initialize(createPluginsFromEnvironment());
 let runtime: ReturnType<typeof createDefaultRuntime>;
 try {
   runtime = createDefaultRuntime({ databasePath: join(dataDirectory, "runtime.sqlite"),
     artifactRoot: join(dataDirectory, "artifacts"), workspaceRoot: repositoryRoot,
-    workerBackend, provider, provenance, pluginHost });
+    workerBackend, provider, provenance, pluginHost, contextTransforms });
 } catch (error) {
   await pluginHost.close();
   throw error;

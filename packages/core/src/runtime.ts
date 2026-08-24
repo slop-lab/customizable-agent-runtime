@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type {
   AgentDriver, ContextProjection, JsonObject, ModelAttempt, ModelAttemptResult, ModelProvider,
-  NormalizedContent,
+  NormalizedContent, ContextTransform,
 } from "./agent-contracts.js";
 import { ModelAttemptFailure, ProviderInvocationError } from "./agent-contracts.js";
 import {
@@ -54,6 +54,7 @@ export interface RuntimeOptions {
   readonly provenance?: RuntimeProvenanceOptions;
   readonly artifactIngress?: ArtifactIngressStore;
   readonly closeResources?: readonly (() => void | Promise<void>)[];
+  readonly contextTransforms?: readonly ContextTransform[];
 }
 
 export interface RunExecution {
@@ -77,6 +78,7 @@ export class Runtime {
   readonly #provenance: RunProvenanceEnvironment;
   readonly #closeResources: readonly (() => void | Promise<void>)[];
   readonly #projector = new DefaultContextProjector();
+  readonly #contextTransforms: readonly ContextTransform[];
   #closed = false;
   #closePromise: Promise<void> | undefined;
 
@@ -96,6 +98,7 @@ export class Runtime {
     this.#toolTimeoutMs = options.toolTimeoutMs ?? 30_000;
     this.#redactor = options.redactor ?? defaultTraceRedactor;
     this.#closeResources = options.closeResources ?? [];
+    this.#contextTransforms = options.contextTransforms ?? [];
     this.#provenance = {
       runtime: options.provenance?.runtime ?? { id: "@car/core", version: "0.0.0" },
       ...(options.provenance?.workspace === undefined ? {} : { workspace: options.provenance.workspace }),
@@ -163,7 +166,10 @@ export class Runtime {
       capabilities: this.provider.capabilities }, driver: { id: this.driver.id, version: this.driver.version },
       tools: this.tools.describe(), plugins: (this.#provenance.plugins ?? []).map((plugin) => ({
         id: plugin.id, version: plugin.version, dependencies: plugin.dependencies,
-      })) } as const;
+      })), contextTransforms: this.#contextTransforms.map((transform) => ({ id: transform.id,
+        version: transform.version, ...(transform.configuration === undefined ? {} : {
+          configuration: transform.configuration,
+        }) })) } as const;
   }
 
   subscribe(listener: (event: RuntimeEvent) => void): () => void {
@@ -249,7 +255,10 @@ export class Runtime {
           profile: this.provider.profile,
           capabilities: this.provider.capabilities,
           ...(this.provider.transport === undefined ? {} : { transport: this.provider.transport }) },
-        contextProjector: { id: this.#projector.id, version: this.#projector.version }, tools: this.tools.describe(),
+        contextProjector: { id: this.#projector.id, version: this.#projector.version },
+        contextTransforms: this.#contextTransforms.map((transform) => ({ id: transform.id, version: transform.version,
+          ...(transform.configuration === undefined ? {} : { configuration: transform.configuration }) })),
+        tools: this.tools.describe(),
         redact: (value) => this.#redactor.redact(value) });
       this.#repository.database.transaction(() => this.#repository.createRun(run, operation, record, provenance, [
         this.#event("run.started", run), this.#event("record.appended", record),
@@ -266,7 +275,8 @@ export class Runtime {
     const now = this.#system.clock.now();
     const attemptId = this.#system.ids.next();
     const operation: Operation = { id: this.#system.ids.next(), runId, kind: "model", status: "running", startedAt: now };
-    const context = this.#projector.project(this.#system.ids.next(), runId, this.getRecords(sessionId), now);
+    const context = this.#projector.project(this.#system.ids.next(), runId, this.getRecords(sessionId), now,
+      { attemptNumber, transforms: this.#contextTransforms });
     const ownership = { type: "model-attempt", id: attemptId, runId } as const;
     const requestWriter = this.#artifactStore.create(this.#system.ids.next(), "provider-request", "application/json", now,
       ownership);

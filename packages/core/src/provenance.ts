@@ -43,6 +43,7 @@ export interface RunProvenanceManifestV1 {
     readonly transport?: ComponentIdentity;
   };
   readonly contextProjector: ComponentIdentity;
+  readonly contextTransforms: readonly ConfiguredComponentIdentity[];
   readonly tools: readonly {
     readonly id: string;
     readonly version: string;
@@ -120,6 +121,7 @@ export interface CreateRunProvenanceInput {
     readonly transport?: ComponentIdentity;
   };
   readonly contextProjector: ComponentIdentity;
+  readonly contextTransforms?: readonly ConfiguredComponentIdentity[];
   readonly tools: readonly ToolDescription[];
   readonly redact: (value: unknown) => unknown;
 }
@@ -138,6 +140,7 @@ export function createRunProvenance(input: CreateRunProvenanceInput): StoredRunP
       ...(input.provider.transport === undefined ? {} : { transport: input.provider.transport }),
     },
     contextProjector: input.contextProjector,
+    contextTransforms: [...(input.contextTransforms ?? [])],
     tools: input.tools.map((tool) => ({
       id: tool.name,
       version: tool.version ?? "unversioned",

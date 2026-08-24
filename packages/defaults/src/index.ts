@@ -1,12 +1,12 @@
 import { dirname, join } from "node:path";
 import type {
-  AgentDriver, DriverContext, ExecutionWorker, JsonObject, ModelInvocationRequest, ModelProvider,
+  AgentDriver, ContextTransform, DriverContext, ExecutionWorker, JsonObject, ModelInvocationRequest, ModelProvider,
   PluginHost, ProviderCapabilitiesV1, ProviderProfile, ProviderTurn, RuntimeProvenanceOptions, RuntimeSystem, Tool,
   WorkerResponse, WorkspaceHandle,
 } from "@car/core";
 import {
-  ArtifactIngressStore, ArtifactStore, KernelDatabase, ModelAttemptFailure, ProviderInvocationError, Runtime,
-  RuntimeError, ToolDispatcher,
+  ArtifactIngressStore, ArtifactStore, KernelDatabase, ModelAttemptFailure, OldToolResultPruningTransform,
+  ProviderInvocationError, Runtime, RuntimeError, ToolDispatcher,
 } from "@car/core";
 import { LocalDevelopmentWorker } from "./local-worker.js";
 import { ProcessIsolatedWorker } from "./isolated-worker.js";
@@ -136,6 +136,7 @@ export interface DefaultRuntimeOptions {
   readonly driver?: AgentDriver;
   readonly pluginHost?: PluginHost;
   readonly provenance?: RuntimeProvenanceOptions;
+  readonly contextTransforms?: readonly ContextTransform[];
 }
 
 export function createRuntimeProvenanceFromEnvironment(
@@ -165,6 +166,23 @@ export function createProviderFromEnvironment(
   const credentials = new EnvironmentCredentialResolver(environment);
   const transport = new GoogleFetchInteractionsTransport(endpoint, credentialHandle, credentials);
   return new GoogleInteractionsProvider({ model, endpoint, credentialHandle, transport });
+}
+
+export function createContextTransformsFromEnvironment(
+  environment: Readonly<Record<string, string | undefined>> = process.env,
+): readonly ContextTransform[] {
+  const enabled = environment.CAR_CONTEXT_TOOL_RESULT_PRUNING ?? "on";
+  if (enabled === "off") return [];
+  if (enabled !== "on") throw new RuntimeError("validation", "CAR_CONTEXT_TOOL_RESULT_PRUNING must be on or off");
+  const protectedValue = environment.CAR_CONTEXT_PROTECTED_TOOLS;
+  return [new OldToolResultPruningTransform({
+    ...environmentInteger(environment, "CAR_CONTEXT_PRUNE_TRIGGER", "minimumCompletedToolExchanges"),
+    ...environmentInteger(environment, "CAR_CONTEXT_RETAIN_TOOL_RESULTS", "retainRecentToolExchanges"),
+    ...environmentInteger(environment, "CAR_CONTEXT_PRUNE_BATCH", "pruneBatchSize"),
+    ...(protectedValue === undefined ? {} : {
+      protectedToolNames: protectedValue.split(",").map((value) => value.trim()).filter(Boolean),
+    }),
+  })];
 }
 
 export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runtime {
@@ -207,6 +225,7 @@ export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runti
       ...(options.artifactRoot === undefined ? {} : { artifactStore: new ArtifactStore(options.artifactRoot) }),
       ...(artifactIngress === undefined ? {} : { artifactIngress }),
       ...(closeResources.length === 0 ? {} : { closeResources }),
+      contextTransforms: options.contextTransforms ?? [new OldToolResultPruningTransform()],
       provenance,
     });
 }
@@ -455,6 +474,14 @@ function optionalString(input: Readonly<Record<string, unknown>>, key: string): 
 function optionalInteger(input: Readonly<Record<string, unknown>>, key: string, minimum: number, maximum: number): boolean {
   const value = input[key];
   return value === undefined || Number.isSafeInteger(value) && Number(value) >= minimum && Number(value) <= maximum;
+}
+function environmentInteger(environment: Readonly<Record<string, string | undefined>>, name: string, key: string) {
+  const value = environment[name];
+  if (value === undefined) return {};
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1) {
+    throw new RuntimeError("validation", `${name} must be a positive integer`);
+  }
+  return { [key]: Number(value) };
 }
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;

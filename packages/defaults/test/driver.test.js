@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { FakeWorker, PluginHost, ProviderInvocationError } from "@car/core";
-import { createDefaultRuntime, createRuntimeProvenanceFromEnvironment, DemoAgentDriver, FakeProvider } from "../dist/index.js";
+import { createContextTransformsFromEnvironment, createDefaultRuntime, createRuntimeProvenanceFromEnvironment,
+  DemoAgentDriver, FakeProvider } from "../dist/index.js";
 
 test("runtime source revision is host-injected through a provenance option", () => {
   assert.deepEqual(createRuntimeProvenanceFromEnvironment({ CAR_SOURCE_REVISION: "abc123" }), {
@@ -12,11 +13,22 @@ test("runtime source revision is host-injected through a provenance option", () 
   });
 });
 
+test("context pruning is configurable from the host environment", () => {
+  assert.deepEqual(createContextTransformsFromEnvironment({ CAR_CONTEXT_TOOL_RESULT_PRUNING: "off" }), []);
+  const [transform] = createContextTransformsFromEnvironment({ CAR_CONTEXT_PRUNE_TRIGGER: "12",
+    CAR_CONTEXT_RETAIN_TOOL_RESULTS: "7", CAR_CONTEXT_PRUNE_BATCH: "5", CAR_CONTEXT_PROTECTED_TOOLS: "skill,custom" });
+  assert.deepEqual(transform.configuration, { minimumCompletedToolExchanges: 12, retainRecentToolExchanges: 7,
+    pruneBatchSize: 5, protectedToolNames: ["custom", "skill"] });
+  assert.throws(() => createContextTransformsFromEnvironment({ CAR_CONTEXT_PRUNE_BATCH: "0" }), /positive integer/);
+});
+
 test("default runtime exposes the complete development workspace tool set", async () => {
   const runtime = createDefaultRuntime({ worker: new FakeWorker(() => ({ ok: true, output: "unused" })) });
   assert.deepEqual(runtime.capabilities().tools.map((tool) => tool.name),
     ["read", "glob", "grep", "edit", "write", "apply_patch", "bash", "git_status", "git_diff", "web_fetch",
       "list", "search", "shell"]);
+  assert.deepEqual(runtime.capabilities().contextTransforms.map((transform) => transform.id),
+    ["core.context.old-tool-results"]);
   await runtime.close();
 });
 

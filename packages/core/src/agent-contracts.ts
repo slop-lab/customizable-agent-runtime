@@ -11,6 +11,42 @@ export type NormalizedContent =
       readonly artifacts?: readonly ArtifactReference[] }
   | { readonly type: "provider-native"; readonly provider: string; readonly value: unknown };
 
+export interface ContextTransformInput {
+  readonly runId: string;
+  readonly attemptNumber: number;
+  readonly content: readonly NormalizedContent[];
+}
+
+export interface ContextTransformDecision {
+  readonly action: string;
+  readonly reason: string;
+  readonly contentIndex?: number;
+  readonly callId?: string;
+  readonly originalBytes?: number;
+  readonly projectedBytes?: number;
+}
+
+export interface ContextTransformResult {
+  readonly content: readonly NormalizedContent[];
+  readonly decisions: readonly ContextTransformDecision[];
+}
+
+export interface ContextTransform {
+  readonly id: string;
+  readonly version: string;
+  readonly configuration?: JsonObject;
+  transform(input: ContextTransformInput): ContextTransformResult;
+}
+
+export interface AppliedContextTransform {
+  readonly id: string;
+  readonly version: string;
+  readonly configuration?: JsonObject;
+  readonly inputHash: string;
+  readonly outputHash: string;
+  readonly decisions: readonly ContextTransformDecision[];
+}
+
 export type CapabilityValue =
   | { readonly supported: false; readonly reason?: string }
   | { readonly supported: true; readonly constraints?: JsonObject };
@@ -96,6 +132,7 @@ export interface ContextProjection {
   readonly includedRecordIds: readonly string[];
   readonly excludedRecords: readonly { readonly recordId: string; readonly reason: string }[];
   readonly content: readonly NormalizedContent[];
+  readonly transformations: readonly AppliedContextTransform[];
   readonly requestHash?: string;
   readonly createdAt: string;
 }

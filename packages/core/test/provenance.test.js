@@ -30,6 +30,7 @@ test("run provenance is redacted, versioned, and hashes canonical tool schemas",
       transport: { id: "transport", version: "1" },
     },
     contextProjector: { id: "projector", version: "1" },
+    contextTransforms: [{ id: "context.prune", version: "1", configuration: { retain: 10 } }],
     tools: [
       { name: "z-tool", version: "1", description: "z", inputSchema: { required: ["value"], type: "object" } },
       { name: "a-tool", version: "2", description: "a", inputSchema: { type: "object", required: ["value"] } },
@@ -43,5 +44,7 @@ test("run provenance is redacted, versioned, and hashes canonical tool schemas",
   assert.equal(stored.manifest.tools[0].inputSchemaHash, stored.manifest.tools[1].inputSchemaHash);
   assert.equal(stored.manifest.workspace.identity.token, "[redacted]");
   assert.equal(stored.manifest.worker.configuration.secret, "[redacted]");
+  assert.deepEqual(stored.manifest.contextTransforms,
+    [{ id: "context.prune", version: "1", configuration: { retain: 10 } }]);
   assert.equal(stored.manifestHash, hashCanonicalJson(stored.manifest));
 });

@@ -244,11 +244,11 @@ export class RuntimeRepository {
   saveContextProjection(value: ContextProjection): void {
     this.database.db.prepare(`INSERT INTO context_projections(
       id, run_id, projector_id, projector_version, included_record_ids_json,
-      excluded_records_json, content_json, request_hash, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      excluded_records_json, content_json, transformations_json, request_hash, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(value.id, value.runId, value.projectorId, value.projectorVersion,
         JSON.stringify(value.includedRecordIds), JSON.stringify(value.excludedRecords), JSON.stringify(value.content),
-        value.requestHash ?? null, value.createdAt);
+        JSON.stringify(value.transformations ?? []), value.requestHash ?? null, value.createdAt);
   }
 
   getContextProjection(id: string): ContextProjection | undefined {
@@ -371,7 +371,9 @@ function contextFromRow(row: Row): ContextProjection {
     projectorVersion: String(row.projector_version),
     includedRecordIds: JSON.parse(String(row.included_record_ids_json)) as string[],
     excludedRecords: JSON.parse(String(row.excluded_records_json)) as { recordId: string; reason: string }[],
-    content: JSON.parse(String(row.content_json)) as ContextProjection["content"], createdAt: String(row.created_at),
+    content: JSON.parse(String(row.content_json)) as ContextProjection["content"],
+    transformations: JSON.parse(String(row.transformations_json ?? "[]")) as ContextProjection["transformations"],
+    createdAt: String(row.created_at),
     ...(row.request_hash === null ? {} : { requestHash: String(row.request_hash) }) };
 }
 function attemptFromRow(row: Row): ModelAttempt {

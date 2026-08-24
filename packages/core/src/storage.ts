@@ -112,6 +112,7 @@ const schema = `
     included_record_ids_json TEXT NOT NULL,
     excluded_records_json TEXT NOT NULL,
     content_json TEXT NOT NULL,
+    transformations_json TEXT NOT NULL DEFAULT '[]',
     request_hash TEXT,
     created_at TEXT NOT NULL
   );
@@ -225,6 +226,15 @@ export class KernelDatabase {
         "SELECT version FROM schema_metadata WHERE singleton = 1").get() as { version: number }).version);
       if (workerManifestVersion < 6) {
         this.db.prepare("UPDATE schema_metadata SET version = 6 WHERE singleton = 1").run();
+      }
+      const contextTransformVersion = Number((this.db.prepare(
+        "SELECT version FROM schema_metadata WHERE singleton = 1").get() as { version: number }).version);
+      if (contextTransformVersion < 7) {
+        const columns = this.db.prepare("PRAGMA table_info(context_projections)").all() as { name: string }[];
+        if (!columns.some((column) => column.name === "transformations_json")) {
+          this.db.exec("ALTER TABLE context_projections ADD COLUMN transformations_json TEXT NOT NULL DEFAULT '[]'");
+        }
+        this.db.prepare("UPDATE schema_metadata SET version = 7 WHERE singleton = 1").run();
       }
     });
   }
