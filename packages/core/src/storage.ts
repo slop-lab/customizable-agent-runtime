@@ -140,6 +140,113 @@ const schema = `
     UNIQUE(run_id, attempt_number)
   );
 
+  CREATE TABLE IF NOT EXISTS review_workflows (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    repository TEXT NOT NULL,
+    base_branch TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    enforcement_json TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    provider_version TEXT NOT NULL,
+    provider_configuration_json TEXT NOT NULL,
+    current_revision INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY(id, current_revision) REFERENCES review_workflow_revisions(workflow_id, revision)
+      DEFERRABLE INITIALLY DEFERRED
+  );
+  CREATE TRIGGER IF NOT EXISTS review_workflows_identity_immutable
+    BEFORE UPDATE OF project_id, repository, base_branch, enforcement_json, provider_id, provider_version,
+      provider_configuration_json ON review_workflows
+    BEGIN
+      SELECT RAISE(ABORT, 'review workflow identity and enforcement are immutable');
+    END;
+  CREATE TABLE IF NOT EXISTS review_workflow_revisions (
+    workflow_id TEXT NOT NULL REFERENCES review_workflows(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL,
+    plan_json TEXT NOT NULL,
+    plan_sha256 TEXT NOT NULL,
+    cause_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY(workflow_id, revision)
+  );
+  CREATE TRIGGER IF NOT EXISTS review_workflow_revisions_immutable
+    BEFORE UPDATE ON review_workflow_revisions
+    BEGIN
+      SELECT RAISE(ABORT, 'review workflow revisions are immutable');
+    END;
+  CREATE TRIGGER IF NOT EXISTS review_workflow_revisions_append_only
+    BEFORE DELETE ON review_workflow_revisions
+    BEGIN
+      SELECT RAISE(ABORT, 'review workflow revisions are append-only');
+    END;
+  CREATE TABLE IF NOT EXISTS review_workflow_evidence (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    workflow_id TEXT NOT NULL REFERENCES review_workflows(id) ON DELETE CASCADE,
+    recorded_revision INTEGER NOT NULL,
+    external_event_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    source_json TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    assurance TEXT NOT NULL CHECK (assurance IN ('asserted', 'attested')),
+    created_at TEXT NOT NULL,
+    UNIQUE(workflow_id, external_event_id),
+    UNIQUE(workflow_id, id),
+    FOREIGN KEY(workflow_id, recorded_revision) REFERENCES review_workflow_revisions(workflow_id, revision)
+      DEFERRABLE INITIALLY DEFERRED
+  );
+  CREATE TRIGGER IF NOT EXISTS review_workflow_evidence_immutable
+    BEFORE UPDATE ON review_workflow_evidence
+    BEGIN
+      SELECT RAISE(ABORT, 'review workflow evidence is immutable');
+    END;
+  CREATE TRIGGER IF NOT EXISTS review_workflow_evidence_append_only
+    BEFORE DELETE ON review_workflow_evidence
+    BEGIN
+      SELECT RAISE(ABORT, 'review workflow evidence is append-only');
+    END;
+  CREATE TABLE IF NOT EXISTS review_workflow_stage_results (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT NOT NULL UNIQUE,
+    workflow_id TEXT NOT NULL REFERENCES review_workflows(id) ON DELETE CASCADE,
+    recorded_revision INTEGER NOT NULL,
+    stage_id TEXT NOT NULL,
+    stage_gate_sha256 TEXT NOT NULL,
+    commit_sha TEXT NOT NULL,
+    evidence_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(workflow_id, recorded_revision) REFERENCES review_workflow_revisions(workflow_id, revision)
+      DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY(workflow_id, evidence_id) REFERENCES review_workflow_evidence(workflow_id, id)
+  );
+  CREATE TRIGGER IF NOT EXISTS review_workflow_stage_results_immutable
+    BEFORE UPDATE ON review_workflow_stage_results
+    BEGIN
+      SELECT RAISE(ABORT, 'review workflow stage results are immutable');
+    END;
+  CREATE TRIGGER IF NOT EXISTS review_workflow_stage_results_append_only
+    BEFORE DELETE ON review_workflow_stage_results
+    BEGIN
+      SELECT RAISE(ABORT, 'review workflow stage results are append-only');
+    END;
+  CREATE INDEX IF NOT EXISTS review_workflows_updated_at
+    ON review_workflows(updated_at DESC, id DESC);
+  CREATE INDEX IF NOT EXISTS review_workflow_evidence_workflow
+    ON review_workflow_evidence(workflow_id, sequence);
+  CREATE INDEX IF NOT EXISTS review_workflow_evidence_head
+    ON review_workflow_evidence(workflow_id, commit_sha, sequence);
+  CREATE INDEX IF NOT EXISTS review_workflow_evidence_type
+    ON review_workflow_evidence(workflow_id, commit_sha, type, recorded_revision);
+  CREATE INDEX IF NOT EXISTS review_workflow_stage_results_workflow
+    ON review_workflow_stage_results(workflow_id, sequence);
+  CREATE INDEX IF NOT EXISTS review_workflow_stage_results_head
+    ON review_workflow_stage_results(workflow_id, commit_sha, sequence);
+  CREATE INDEX IF NOT EXISTS review_workflow_stage_results_gate
+    ON review_workflow_stage_results(workflow_id, commit_sha, stage_id, stage_gate_sha256, recorded_revision);
+
   UPDATE schema_metadata SET version = 2 WHERE singleton = 1 AND version < 2;
 `;
 
@@ -235,6 +342,11 @@ export class KernelDatabase {
           this.db.exec("ALTER TABLE context_projections ADD COLUMN transformations_json TEXT NOT NULL DEFAULT '[]'");
         }
         this.db.prepare("UPDATE schema_metadata SET version = 7 WHERE singleton = 1").run();
+      }
+      const reviewWorkflowVersion = Number((this.db.prepare(
+        "SELECT version FROM schema_metadata WHERE singleton = 1").get() as { version: number }).version);
+      if (reviewWorkflowVersion < 8) {
+        this.db.prepare("UPDATE schema_metadata SET version = 8 WHERE singleton = 1").run();
       }
     });
   }

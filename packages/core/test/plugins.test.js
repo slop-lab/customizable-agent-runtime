@@ -5,6 +5,9 @@ import { PluginHost, RuntimeError } from "../dist/index.js";
 function tool(name) {
   return { description: { name, version: "1", description: name }, async execute() { return { output: name }; } };
 }
+function reviewProvider(id) {
+  return { identity: { id, version: "1" }, create() { return { stages: [] }; }, revise() { return []; } };
+}
 function plugin(id, options = {}) {
   return { manifest: { apiVersion: 1, id, version: "1", ...(options.dependencies ? {
     dependencies: options.dependencies,
@@ -14,6 +17,7 @@ function plugin(id, options = {}) {
       options.capture?.(registrar);
       for (const name of options.tools ?? []) registrar.registerTool(tool(name));
       if (options.middleware) registrar.registerToolMiddleware(options.middleware);
+      for (const provider of options.reviewProviders ?? []) registrar.registerReviewWorkflowProvider(provider);
       if (options.setupError) throw new Error(options.setupError);
     },
     async start() { options.log?.push(`start:${id}`); if (options.startError) throw new Error(options.startError); },
@@ -34,6 +38,7 @@ test("plugin host orders dependencies deterministically and closes them in rever
     plugin("integration.zeta", { dependencies: ["integration.alpha"], log,
       tools: ["integration.zeta.lookup"] }),
     plugin("integration.alpha", { log, configuration, tools: ["integration.alpha.lookup"],
+      reviewProviders: [reviewProvider("integration.alpha.dynamic-review")],
       capture: (value) => { captured = value; } }),
   ]);
   configuration.endpoint = "https://changed.test";
@@ -41,9 +46,13 @@ test("plugin host orders dependencies deterministically and closes them in rever
     "start:integration.alpha", "start:integration.zeta"]);
   assert.deepEqual(host.tools().map((value) => value.description.name),
     ["integration.alpha.lookup", "integration.zeta.lookup"]);
+  assert.deepEqual(host.reviewWorkflowProviders().map((value) => value.identity.id),
+    ["integration.alpha.dynamic-review"]);
   assert.deepEqual(host.identities().map((value) => value.id), ["integration.alpha", "integration.zeta"]);
   assert.equal(host.identities()[0].configuration.endpoint, "https://original.test");
   assert.throws(() => captured.registerTool(tool("integration.alpha.late")),
+    (error) => error instanceof RuntimeError && error.code === "conflict");
+  assert.throws(() => captured.registerReviewWorkflowProvider(reviewProvider("integration.alpha.late")),
     (error) => error instanceof RuntimeError && error.code === "conflict");
   assert.deepEqual(await host.close(), []);
   assert.deepEqual(log.slice(-2), ["stop:integration.zeta", "stop:integration.alpha"]);
@@ -63,6 +72,13 @@ test("plugin host rejects invalid graphs and tool namespaces before activation",
   await assert.rejects(() => PluginHost.initialize([
     plugin("integration.valid", { tools: ["wrong.lookup"] }),
   ]), /must use namespace/);
+  await assert.rejects(() => PluginHost.initialize([
+    plugin("integration.valid", { reviewProviders: [reviewProvider("wrong.review")] }),
+  ]), /must use namespace/);
+  await assert.rejects(() => PluginHost.initialize([
+    plugin("integration.alpha", { reviewProviders: [reviewProvider("integration.alpha.review.dynamic")] }),
+    plugin("integration.alpha.review", { reviewProviders: [reviewProvider("integration.alpha.review.dynamic")] }),
+  ]), /already registered/);
 });
 
 test("plugin startup fails atomically and cleanup attempts continue after an error", async () => {

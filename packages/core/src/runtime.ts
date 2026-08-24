@@ -19,6 +19,16 @@ import { ContextTransformFailure, DefaultContextProjector } from "./context-proj
 import type { Operation, OperationStatus } from "./domain.js";
 import { RuntimeError } from "./errors.js";
 import { RuntimeRepository } from "./persistence.js";
+import {
+  ReviewWorkflowService,
+  type CompleteReviewStageInput,
+  type CreateReviewWorkflowInput,
+  type ReviewEvidenceInput,
+  type ReviewWorkflowHistoryPage,
+  type ReviewWorkflowProvider,
+  type ReviewWorkflowSummary,
+  type UpdateReviewWorkflowHeadInput,
+} from "./review-workflows.js";
 import { KernelDatabase } from "./storage.js";
 import { defaultRuntimeSystem, type RuntimeSystem } from "./system.js";
 import { ToolDispatcher } from "./tool-dispatcher.js";
@@ -55,6 +65,7 @@ export interface RuntimeOptions {
   readonly artifactIngress?: ArtifactIngressStore;
   readonly closeResources?: readonly (() => void | Promise<void>)[];
   readonly contextTransforms?: readonly ContextTransform[];
+  readonly reviewWorkflowProviders?: readonly ReviewWorkflowProvider[];
 }
 
 export interface RunExecution {
@@ -71,6 +82,7 @@ export class Runtime {
   readonly #system: RuntimeSystem;
   readonly #database: KernelDatabase;
   readonly #repository: RuntimeRepository;
+  readonly #reviewWorkflows: ReviewWorkflowService;
   readonly #artifactStore: ArtifactStore;
   readonly #artifactIngress: ArtifactIngressStore | undefined;
   readonly #temporaryArtifactRoot: string | undefined;
@@ -93,6 +105,8 @@ export class Runtime {
     this.#system = options.system ?? defaultRuntimeSystem;
     this.#database = options.database ?? new KernelDatabase(":memory:");
     this.#repository = new RuntimeRepository(this.#database);
+    this.#reviewWorkflows = new ReviewWorkflowService(this.#database, this.#system,
+      options.reviewWorkflowProviders);
     this.#temporaryArtifactRoot = options.artifactStore ? undefined : mkdtempSync(join(tmpdir(), "car-artifacts-"));
     this.#artifactStore = options.artifactStore ?? new ArtifactStore(this.#temporaryArtifactRoot!);
     this.#artifactIngress = options.artifactIngress;
@@ -164,10 +178,37 @@ export class Runtime {
     return metadata === undefined || metadata.status === "partial" ? undefined : this.#artifactStore.read(metadata);
   }
 
+  createReviewWorkflow(input: CreateReviewWorkflowInput): Promise<ReviewWorkflowSummary> {
+    this.#assertOpen();
+    return this.#trackReviewAdmission(this.#reviewWorkflows.create(input));
+  }
+  getReviewWorkflow(id: string): ReviewWorkflowSummary | undefined { return this.#reviewWorkflows.get(id); }
+  listReviewWorkflows(options: { readonly limit?: number } = {}): readonly ReviewWorkflowSummary[] {
+    return this.#reviewWorkflows.list(readLimit(options.limit));
+  }
+  getReviewWorkflowHistory(id: string,
+    options: { readonly limit?: number; readonly beforeRevision?: number } = {}): ReviewWorkflowHistoryPage {
+    return this.#reviewWorkflows.history(id, options);
+  }
+  appendReviewEvidence(id: string, expectedRevision: number,
+    evidence: ReviewEvidenceInput): Promise<ReviewWorkflowSummary> {
+    this.#assertOpen();
+    return this.#trackReviewAdmission(this.#reviewWorkflows.appendEvidence(id, expectedRevision, evidence));
+  }
+  completeReviewStage(id: string, input: CompleteReviewStageInput): Promise<ReviewWorkflowSummary> {
+    this.#assertOpen();
+    return this.#trackReviewAdmission(this.#reviewWorkflows.completeStage(id, input));
+  }
+  updateReviewWorkflowHead(id: string, input: UpdateReviewWorkflowHeadInput): Promise<ReviewWorkflowSummary> {
+    this.#assertOpen();
+    return this.#trackReviewAdmission(this.#reviewWorkflows.updateHead(id, input));
+  }
+
   capabilities() {
     return { apiVersion: "v1", provider: { id: this.provider.id, profile: this.provider.profile,
       capabilities: this.provider.capabilities }, driver: { id: this.driver.id, version: this.driver.version },
-      tools: this.tools.describe(), plugins: (this.#provenance.plugins ?? []).map((plugin) => ({
+      tools: this.tools.describe(), reviewWorkflowProviders: this.#reviewWorkflows.providers(),
+      plugins: (this.#provenance.plugins ?? []).map((plugin) => ({
         id: plugin.id, version: plugin.version, dependencies: plugin.dependencies,
       })), contextTransforms: this.#contextTransforms.map((transform) => ({ id: transform.id,
         version: transform.version, ...(transform.configuration === undefined ? {} : {
@@ -267,6 +308,10 @@ export class Runtime {
     void admission.then(() => this.#pendingAdmissions.delete(admission),
       () => this.#pendingAdmissions.delete(admission));
     return admission;
+  }
+
+  #trackReviewAdmission(admission: Promise<ReviewWorkflowSummary>): Promise<ReviewWorkflowSummary> {
+    return this.#trackAdmission(admission.then((snapshot) => { this.#publishPending(); return snapshot; }));
   }
 
   async #startRun(sessionId: string, input: string): Promise<{ run: Run; operation: Operation }> {

@@ -2,6 +2,7 @@ import type { JsonObject } from "./agent-contracts.js";
 import type { Tool, ToolMiddleware } from "./contracts.js";
 import { RuntimeError } from "./errors.js";
 import { canonicalJson, type ConfiguredPluginIdentity } from "./provenance.js";
+import type { ReviewWorkflowProvider } from "./review-workflows.js";
 
 export interface PluginManifestV1 {
   readonly apiVersion: 1;
@@ -19,6 +20,7 @@ export interface PluginHealth {
 export interface PluginRegistrar {
   registerTool(tool: Tool): void;
   registerToolMiddleware(middleware: ToolMiddleware): void;
+  registerReviewWorkflowProvider(provider: ReviewWorkflowProvider): void;
 }
 
 export interface RuntimePlugin {
@@ -51,15 +53,17 @@ export class PluginHost {
   readonly #entries: readonly PluginEntry[];
   readonly #tools: readonly Tool[];
   readonly #middleware: readonly ToolMiddleware[];
+  readonly #reviewWorkflowProviders: readonly ReviewWorkflowProvider[];
   readonly #healthTimeoutMs: number;
   #closed = false;
   #closePromise: Promise<readonly Error[]> | undefined;
 
   private constructor(entries: readonly PluginEntry[], tools: readonly Tool[], middleware: readonly ToolMiddleware[],
-    options: PluginHostOptions) {
+    reviewWorkflowProviders: readonly ReviewWorkflowProvider[], options: PluginHostOptions) {
     this.#entries = entries;
     this.#tools = tools;
     this.#middleware = middleware;
+    this.#reviewWorkflowProviders = reviewWorkflowProviders;
     this.#healthTimeoutMs = options.healthTimeoutMs ?? 2_000;
     if (!Number.isSafeInteger(this.#healthTimeoutMs) || this.#healthTimeoutMs < 1) {
       throw new RuntimeError("validation", "Plugin health timeout must be a positive integer");
@@ -71,7 +75,9 @@ export class PluginHost {
     const entries: PluginEntry[] = [];
     const tools: Tool[] = [];
     const middleware: ToolMiddleware[] = [];
+    const reviewWorkflowProviders: ReviewWorkflowProvider[] = [];
     const toolOwners = new Map<string, string>();
+    const reviewWorkflowProviderOwners = new Map<string, string>();
     try {
       for (const plugin of ordered) {
         const identity = identityFromManifest(plugin.manifest);
@@ -79,6 +85,7 @@ export class PluginHost {
         entries.push(entry);
         const stagedTools: Tool[] = [];
         const stagedMiddleware: ToolMiddleware[] = [];
+        const stagedReviewWorkflowProviders: ReviewWorkflowProvider[] = [];
         let accepting = true;
         const registrar: PluginRegistrar = {
           registerTool(tool) {
@@ -93,6 +100,15 @@ export class PluginHost {
             if (!accepting) throw new RuntimeError("conflict", `Plugin registration phase ended: ${identity.id}`);
             stagedMiddleware.push(value);
           },
+          registerReviewWorkflowProvider(provider) {
+            if (!accepting) throw new RuntimeError("conflict", `Plugin registration phase ended: ${identity.id}`);
+            validatePluginReviewWorkflowProvider(identity.id, provider);
+            if (stagedReviewWorkflowProviders.some((candidate) =>
+              reviewProviderKey(candidate) === reviewProviderKey(provider))) {
+              throw new RuntimeError("conflict", `Duplicate plugin review workflow provider: ${reviewProviderKey(provider)}`);
+            }
+            stagedReviewWorkflowProviders.push(provider);
+          },
         };
         try { await plugin.setup(registrar); }
         finally { accepting = false; }
@@ -105,12 +121,22 @@ export class PluginHost {
           tools.push(tool);
         }
         middleware.push(...stagedMiddleware);
+        for (const provider of stagedReviewWorkflowProviders) {
+          const key = reviewProviderKey(provider);
+          const existing = reviewWorkflowProviderOwners.get(key);
+          if (existing !== undefined) {
+            throw new RuntimeError("conflict",
+              `Plugin review workflow provider ${key} is already registered by ${existing}`);
+          }
+          reviewWorkflowProviderOwners.set(key, identity.id);
+          reviewWorkflowProviders.push(provider);
+        }
       }
       for (const entry of entries) {
         await entry.plugin.start?.();
         entry.state = "ready";
       }
-      return new PluginHost(entries, tools, middleware, options);
+      return new PluginHost(entries, tools, middleware, reviewWorkflowProviders, options);
     } catch (error) {
       await stopEntries(entries);
       const message = error instanceof Error ? error.message : String(error);
@@ -120,6 +146,7 @@ export class PluginHost {
 
   tools(): readonly Tool[] { return this.#tools; }
   middleware(): readonly ToolMiddleware[] { return this.#middleware; }
+  reviewWorkflowProviders(): readonly ReviewWorkflowProvider[] { return this.#reviewWorkflowProviders; }
   identities(): readonly ConfiguredPluginIdentity[] { return this.#entries.map((entry) => entry.identity); }
 
   async inspect(): Promise<readonly PluginInspection[]> {
@@ -207,6 +234,17 @@ function validatePluginTool(pluginId: string, tool: Tool): void {
   if (!name.startsWith(`${pluginId}.`) || !qualifiedId(name)) {
     throw new RuntimeError("validation", `Plugin tool must use namespace ${pluginId}: ${name}`);
   }
+}
+
+function validatePluginReviewWorkflowProvider(pluginId: string, provider: ReviewWorkflowProvider): void {
+  const { id, version } = provider.identity;
+  if (!id.startsWith(`${pluginId}.`) || !qualifiedId(id) || !nonEmpty(version)) {
+    throw new RuntimeError("validation", `Plugin review workflow provider must use namespace ${pluginId}: ${id}`);
+  }
+}
+
+function reviewProviderKey(provider: ReviewWorkflowProvider): string {
+  return `${provider.identity.id}@${provider.identity.version}`;
 }
 
 async function stopEntries(entries: readonly PluginEntry[]): Promise<readonly Error[]> {

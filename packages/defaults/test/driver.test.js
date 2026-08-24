@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { FakeWorker, PluginHost, ProviderInvocationError } from "@car/core";
+import { defaultReviewWorkflowPlan, FakeWorker, PluginHost, ProviderInvocationError } from "@car/core";
 import { createContextTransformsFromEnvironment, createDefaultRuntime, createRuntimeProvenanceFromEnvironment,
   DemoAgentDriver, FakeProvider } from "../dist/index.js";
 
@@ -42,6 +42,10 @@ test("default runtime exposes plugin tools, identity, provenance, and cleanup", 
         description: { name: "integration.example.lookup", version: "1", description: "lookup" },
         async execute() { return { output: "plugin result" }; },
       });
+      registrar.registerReviewWorkflowProvider({
+        identity: { id: "integration.example.dynamic-review", version: "1" },
+        create() { return defaultReviewWorkflowPlan(); }, revise() { return []; },
+      });
     },
     stop() { stopped++; },
   }]);
@@ -61,6 +65,14 @@ test("default runtime exposes plugin tools, identity, provenance, and cleanup", 
   assert.deepEqual(runtime.capabilities().plugins,
     [{ id: "integration.example", version: "1", dependencies: [] }]);
   assert.equal(runtime.capabilities().tools.some((tool) => tool.name === "integration.example.lookup"), true);
+  assert.deepEqual(runtime.capabilities().reviewWorkflowProviders, [
+    { id: "core.review.adaptive", version: "1" },
+    { id: "core.review.declarative", version: "1" },
+    { id: "integration.example.dynamic-review", version: "1" },
+  ]);
+  const workflow = await runtime.createReviewWorkflow({ projectId: "plugin", repository: "example/repository",
+    baseBranch: "main", headSha: "a".repeat(40), provider: { id: "integration.example.dynamic-review" } });
+  assert.equal(workflow.workflow.provider.id, "integration.example.dynamic-review");
   const session = await runtime.createSession("plugin-session");
   const run = await runtime.run(session.id, "use the plugin");
   assert.equal(run.status, "completed");

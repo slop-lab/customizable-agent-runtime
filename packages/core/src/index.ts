@@ -8,6 +8,7 @@ export * from "./persistence.js";
 export * from "./plugins.js";
 export * from "./provenance.js";
 export * from "./runtime.js";
+export * from "./review-workflows.js";
 export * from "./storage.js";
 export * from "./system.js";
 export * from "./trace.js";

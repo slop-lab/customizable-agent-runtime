@@ -2,7 +2,7 @@ import { dirname, join } from "node:path";
 import type {
   AgentDriver, ContextTransform, DriverContext, ExecutionWorker, JsonObject, ModelInvocationRequest, ModelProvider,
   PluginHost, ProviderCapabilitiesV1, ProviderProfile, ProviderTurn, RuntimeProvenanceOptions, RuntimeSystem, Tool,
-  WorkerResponse, WorkspaceHandle,
+  WorkerResponse, WorkspaceHandle, ReviewWorkflowProvider,
 } from "@car/core";
 import {
   ArtifactIngressStore, ArtifactStore, KernelDatabase, ModelAttemptFailure, OldToolResultPruningTransform,
@@ -137,6 +137,7 @@ export interface DefaultRuntimeOptions {
   readonly pluginHost?: PluginHost;
   readonly provenance?: RuntimeProvenanceOptions;
   readonly contextTransforms?: readonly ContextTransform[];
+  readonly reviewWorkflowProviders?: readonly ReviewWorkflowProvider[];
 }
 
 export function createRuntimeProvenanceFromEnvironment(
@@ -226,6 +227,10 @@ export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runti
       ...(artifactIngress === undefined ? {} : { artifactIngress }),
       ...(closeResources.length === 0 ? {} : { closeResources }),
       contextTransforms: options.contextTransforms ?? [new OldToolResultPruningTransform()],
+      reviewWorkflowProviders: [
+        ...(options.reviewWorkflowProviders ?? []),
+        ...(options.pluginHost?.reviewWorkflowProviders() ?? []),
+      ],
       provenance,
     });
 }

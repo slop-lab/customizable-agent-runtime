@@ -146,7 +146,8 @@ export interface RuntimeEvent {
     | "run.finished"
     | "operation.started"
     | "operation.finished"
-    | "operation.recovered";
+    | "operation.recovered"
+    | "review-workflow.revised";
   readonly occurredAt: string;
   readonly data: unknown;
 }

@@ -54,7 +54,7 @@ test("file database rejects a second active writer and permits it after close", 
 
 test("schema migration is transactional", () => {
   const database = new KernelDatabase(":memory:");
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 7);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 8);
   assert.throws(() => database.transaction(() => {
     database.db.exec("CREATE TABLE should_rollback(value TEXT)");
     throw new Error("fail migration");
@@ -73,7 +73,7 @@ test("schema version 2 databases gain normalized provider usage", () => {
   database.db.exec("ALTER TABLE model_attempts DROP COLUMN normalized_usage_json; UPDATE schema_metadata SET version = 2");
   database.close();
   database = new KernelDatabase(path);
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 7);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 8);
   assert.equal(database.db.prepare("PRAGMA table_info(model_attempts)").all()
     .some((column) => column.name === "normalized_usage_json"), true);
   database.close();
@@ -87,7 +87,7 @@ test("schema version 3 databases gain immutable run provenance storage", () => {
   database.db.exec("DROP TRIGGER run_provenance_immutable; DROP TABLE run_provenance; UPDATE schema_metadata SET version = 3");
   database.close();
   database = new KernelDatabase(path);
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 7);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 8);
   assert.equal(database.db.prepare("SELECT count(*) count FROM sqlite_master WHERE type = 'table' AND name = 'run_provenance'").get().count, 1);
   assert.equal(database.db.prepare("SELECT count(*) count FROM sqlite_master WHERE type = 'trigger' AND name = 'run_provenance_immutable'").get().count, 1);
   database.close();
@@ -104,7 +104,7 @@ test("schema version 4 databases gain artifact ownership", () => {
     UPDATE schema_metadata SET version = 4`);
   database.close();
   database = new KernelDatabase(path);
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 7);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 8);
   const columns = database.db.prepare("PRAGMA table_info(artifacts)").all().map((column) => column.name);
   assert.equal(columns.includes("owner_type"), true);
   assert.equal(columns.includes("owner_id"), true);
@@ -122,7 +122,7 @@ test("schema version 5 databases gain immutable worker execution manifests", () 
     UPDATE schema_metadata SET version = 5`);
   database.close();
   database = new KernelDatabase(path);
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 7);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 8);
   assert.equal(database.db.prepare(`SELECT count(*) count FROM sqlite_master
     WHERE type = 'table' AND name = 'run_worker_execution_manifests'`).get().count, 1);
   assert.equal(database.db.prepare(`SELECT count(*) count FROM sqlite_master
@@ -138,9 +138,38 @@ test("schema version 6 databases gain context transformation audit storage", () 
   database.db.exec("ALTER TABLE context_projections DROP COLUMN transformations_json; UPDATE schema_metadata SET version = 6");
   database.close();
   database = new KernelDatabase(path);
-  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 7);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 8);
   assert.equal(database.db.prepare("PRAGMA table_info(context_projections)").all()
     .some((column) => column.name === "transformations_json"), true);
+  database.close();
+  rmSync(directory, { recursive: true, force: true });
+});
+
+test("schema version 7 databases gain immutable adaptive review workflow storage", () => {
+  const directory = mkdtempSync(join(tmpdir(), "car-migration-v7-"));
+  const path = join(directory, "runtime.sqlite");
+  let database = new KernelDatabase(path);
+  database.db.exec(`DROP TRIGGER review_workflow_stage_results_immutable;
+    DROP TRIGGER review_workflow_evidence_immutable;
+    DROP TRIGGER review_workflow_revisions_immutable;
+    DROP TABLE review_workflow_stage_results;
+    DROP TABLE review_workflow_evidence;
+    DROP TABLE review_workflow_revisions;
+    DROP TABLE review_workflows;
+    UPDATE schema_metadata SET version = 7`);
+  database.close();
+  database = new KernelDatabase(path);
+  assert.equal(database.db.prepare("SELECT version FROM schema_metadata WHERE singleton = 1").get().version, 8);
+  const objects = database.db.prepare(`SELECT name FROM sqlite_master
+    WHERE name LIKE 'review_workflow%' ORDER BY name`).all().map((row) => row.name);
+  assert.deepEqual(objects, [
+    "review_workflow_evidence", "review_workflow_evidence_append_only", "review_workflow_evidence_head",
+    "review_workflow_evidence_immutable", "review_workflow_evidence_type", "review_workflow_evidence_workflow", "review_workflow_revisions",
+    "review_workflow_revisions_append_only", "review_workflow_revisions_immutable", "review_workflow_stage_results",
+    "review_workflow_stage_results_append_only", "review_workflow_stage_results_gate", "review_workflow_stage_results_head",
+    "review_workflow_stage_results_immutable", "review_workflow_stage_results_workflow", "review_workflows",
+    "review_workflows_identity_immutable", "review_workflows_updated_at",
+  ]);
   database.close();
   rmSync(directory, { recursive: true, force: true });
 });
