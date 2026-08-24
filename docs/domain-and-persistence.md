@@ -22,6 +22,10 @@
   migration and transactional event publication.
 - A **resource** is a longer-lived external object such as a PTY, process,
   browser, SSH connection, worktree, remote workspace, or worker.
+- A **review workflow** binds immutable merge-policy constraints to a repository,
+  base branch, and current head SHA. Its provider-neutral stage DAG can gain
+  requirements through append-only revisions. Evidence and stage results are
+immutable, structured, source-attributed, and commit-pinned.
 
 ## SQLite storage
 
@@ -42,6 +46,23 @@ defined recovery rule.
 SQLite stores artifact metadata, hashes, ownership, and retention state. Large
 payloads live in a content-addressed filesystem store initially; putting
 unbounded blobs in the database is not the default.
+
+Review workflows use a mutable identity/current-revision row plus immutable
+revision, evidence, and stage-result rows. Every accepted mutation appends a
+full hashed plan snapshot and advances the current revision with compare-and-
+swap. Stage results retain a transitive gate hash, so a later dependency
+amendment invalidates affected downstream results without discarding unaffected
+upstream work. A head change preserves old history but excludes it from current
+completion and readiness projections.
+
+Workflow identity, enforcement, provider version/configuration, and history
+rows are protected from in-place updates; history deletion is rejected. Foreign
+keys bind the current pointer, recorded revision, and stage-result evidence to
+the same workflow. Revision hashes are verified on read. External event IDs are
+unique per workflow for exact retry, and revision events enter the normal
+outbox transactionally. Current HTTP evidence is explicitly operator-asserted;
+only a future authenticated adapter-attested projection may be published as a
+hard Git-host check.
 
 SQLite does not define domain identity or branch semantics. IDs are generated
 by the runtime before persistence and remain opaque strings at API boundaries.

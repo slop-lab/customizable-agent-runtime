@@ -71,11 +71,12 @@ and devices are separate modules.
 The implemented first slice is deliberately narrower than the target model
 below. A trusted host receives an explicit list of in-process plugins, validates
 versioned manifests and dependency graphs, and allows setup-time registration
-of tools and tool middleware only. Setup/start are sequential in deterministic
-dependency order, cleanup is reverse-order, and health checks are bounded and
-inspectable. There is no scanning, dynamic import/install, hot reload, module
-state, event subscription, provider/context registration, or compatibility
-promise yet. The separate `@car/plugin-gitea` package exercises this seam with
+of tools, tool middleware, and namespaced adaptive review-workflow providers.
+Setup/start are sequential in deterministic dependency order, cleanup is
+reverse-order, and health checks are bounded and inspectable. There is no
+scanning, dynamic import/install, hot reload, module state, event subscription,
+model-provider/context registration, or compatibility promise yet. The
+separate `@car/plugin-gitea` package exercises this seam with
 two read-only tools and a credential-resolving HTTP transport. The
 `@car/plugin-mcp` package adds bounded remote tool discovery and invocation over
 Streamable HTTP while retaining the same dispatcher and provenance path.
@@ -150,11 +151,19 @@ The base API and modules are versioned and capability-discovered. Unknown
 records/actions get a generic structured or artifact fallback. Default remote
 deployment is localhost plus SSH forwarding; later options include private
 networks, reverse proxies, static tokens, OIDC, and client certificates.
+The current HTTP daemon accepts only exact loopback Host/Origin values by
+default, requires JSON mutation bodies, and caps them at 128 KiB. A
+non-loopback bind must declare exact `CAR_ALLOWED_ORIGINS`; this is a defensive
+local boundary rather than the future remote authentication protocol.
 
 The web UI is optional and uses only the API. The current dependency-free
 client shows sessions, runs, conversation records, tool payloads, cancellation,
 capabilities, plugin health, attempts, operations, provenance, and context
-projections. Future clients may add streams, rendered diffs, artifact browsing,
+projections. It also exposes the initial adaptive review-workflow lifecycle:
+create/select, ordered completion, normalized risk evidence, head update,
+revision history summary, advisory policy blockers, and missing-attestation
+blockers. Future clients may add
+streams, rendered diffs, artifact browsing,
 configuration, actions, files/editor/PTY, background operations, approvals,
 branches, usage, and cost. UI extension progresses from generic renderers and
 forms to metadata panels and separate clients before any arbitrary frontend

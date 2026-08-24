@@ -77,6 +77,15 @@ phase 4 transport. It uses the disposable HTTP API with asynchronous run start
 and polling. The same slice expands the default coding tools and validates the
 context-module seam with auditable, projection-only old tool-result pruning.
 
+ADR 0009 adds a provider-neutral adaptive review-workflow vertical slice. It
+persists immutable policy constraints, CAS revisions, structured commit-pinned
+evidence, transitive gate invalidation, and merge-readiness projections, with
+both declarative and evidence-adaptive providers. Git-host status publication,
+actual pull-request creation, authenticated approvals, YAML compilation, and
+DIM/Symphony adapters remain phase-6 integration work. Until authenticated
+evidence admission exists, browser/HTTP evidence is operator-asserted and only
+the advisory `ready` projection can change; `publishable` remains false.
+
 0. Finalize ADRs for core/daemon, SQLite journal/state/outbox, driver, provider
    and transport, dispatcher/executor, trusted plugins, JSON-RPC, content model,
    and capability/credential boundaries.
