@@ -72,6 +72,11 @@ and asynchronous cleanup boundaries are exercised by real external
 integrations. It remains pre-stable and intentionally excludes dynamic loading,
 restricted execution, module state, subscriptions, and reload.
 
+ADR 0008 also delivers the minimal functional browser client ahead of the final
+phase 4 transport. It uses the disposable HTTP API with asynchronous run start
+and polling. The same slice expands the default coding tools and validates the
+context-module seam with auditable, projection-only old tool-result pruning.
+
 0. Finalize ADRs for core/daemon, SQLite journal/state/outbox, driver, provider
    and transport, dispatcher/executor, trusted plugins, JSON-RPC, content model,
    and capability/credential boundaries.
@@ -84,9 +89,12 @@ restricted execution, module state, subscriptions, and reload.
    artifact projection.
 4. Replace the spike HTTP server with WebSocket JSON-RPC, reconnect, snapshots,
    inspectors, capabilities, and actions.
-5. Add the minimal web client.
+5. Add the minimal web client. **Functional HTTP/polling client complete; final
+   JSON-RPC transport integration remains coupled to phase 4.**
 6. Validate seams with a skill/context module, sandbox/policy middleware, and a
    worktree or subagent workflow before freezing public plugin APIs.
+   **The provider-neutral context-transform seam has one default implementation;
+   skill compatibility, policy/approval, and workflow validation remain.**
 
 ## Patterns to reject
 

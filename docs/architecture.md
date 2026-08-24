@@ -42,9 +42,10 @@ and an artifact stores large or binary content outside a record.
 The durable spike implements SQLite-backed sessions, runs, operations, records,
 command receipts, an event outbox, immutable run-provenance manifests, context
 and usage projections, model attempts, and provider artifacts. Its typed
-development worker supports read,
-directory-listing, regex search, full-file write, unified-diff patch, shell, and
-Git-status execution. Large tool output crosses a hash/size/ownership-validated
+development worker supports ranged reads, glob discovery, bounded regex
+search, exact edits, full-file writes, unified-diff patches, shell, Git
+status/diff, and bounded textual HTTP fetches. Large tool output crosses a
+hash/size/ownership-validated
 staging boundary into durable artifacts, and a second lazy child-process worker
 implements a versioned JSON-lines protocol, renewable leases, cancellation,
 crash reconciliation, and child-produced execution manifests. That backend is
@@ -52,6 +53,20 @@ process-isolated for lifecycle testing, not sandboxed from the host. Branching,
 suspension, and module state remain planned kernel capabilities. The canonical
 remote protocol will be WebSocket JSON-RPC 2.0; the current small HTTP endpoint
 and its list/usage inspectors are disposable spike code.
+
+The daemon serves a dependency-free same-origin web client over that disposable
+HTTP API. Run creation returns an accepted running snapshot immediately and the
+client polls durable run/record projections. This supplies a usable browser
+surface without pre-empting JSON-RPC sequence, replay, acknowledgement, or
+backpressure decisions.
+
+The model plane now applies ordered provider-neutral context transforms between
+record normalization and provider adaptation. Transform results are attempt
+projections only: records and artifacts remain authoritative and immutable.
+Each projection persists transform configuration, decisions, and input/output
+hashes. The default policy replaces old successful tool-result output in stable
+batches while preserving call/result structure. Model-generated summarization
+and provider-specific raw-request hooks remain separate future concerns.
 
 The spike now also has a pre-stable trusted plugin host. It validates explicit
 versioned manifests, orders dependencies deterministically, separates setup

@@ -151,13 +151,15 @@ records/actions get a generic structured or artifact fallback. Default remote
 deployment is localhost plus SSH forwarding; later options include private
 networks, reverse proxies, static tokens, OIDC, and client certificates.
 
-The web UI is optional and uses only the API. It may show sessions, runs,
-conversation, streams, tools, diffs, artifacts, context/final-request
-inspectors, configuration, cancellation, actions, files/editor/PTY, background
-operations, approvals, branches, usage, and cost. UI extension progresses from
-generic renderers and forms to metadata panels and separate clients before any
-arbitrary frontend plugin ABI. A CLI, if added, focuses on serve/status/doctor
-and is not the stable automation protocol.
+The web UI is optional and uses only the API. The current dependency-free
+client shows sessions, runs, conversation records, tool payloads, cancellation,
+capabilities, plugin health, attempts, operations, provenance, and context
+projections. Future clients may add streams, rendered diffs, artifact browsing,
+configuration, actions, files/editor/PTY, background operations, approvals,
+branches, usage, and cost. UI extension progresses from generic renderers and
+forms to metadata panels and separate clients before any arbitrary frontend
+plugin ABI. A CLI, if added, focuses on serve/status/doctor and is not the
+stable automation protocol.
 
 ## Feature ownership summary
 

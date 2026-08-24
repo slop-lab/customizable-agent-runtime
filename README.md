@@ -40,13 +40,24 @@ just start
 
 Direct `pnpm` commands remain supported; `just` is only a convenience layer.
 
-The daemon binds to `127.0.0.1:4317` by default. Try the initial API:
+The daemon binds to `127.0.0.1:4317` by default. Open that address in a browser
+to use the functional web client. It creates and selects durable sessions,
+starts and cancels runs, polls the transcript, expands tool calls/results, and
+inspects attempts, operations, provenance, and the latest context projection.
+It deliberately uses plain HTML/CSS/JavaScript and has no UI framework or
+polished interaction contract.
+
+The same operations remain available through the initial HTTP API:
 
 ```bash
 curl http://127.0.0.1:4317/v1/capabilities
 curl http://127.0.0.1:4317/v1/plugins
 curl -X POST http://127.0.0.1:4317/v1/sessions
 curl http://127.0.0.1:4317/v1/sessions
+curl -X POST -H 'content-type: application/json' \
+  -d '{"input":"Summarize this repository"}' \
+  http://127.0.0.1:4317/v1/sessions/SESSION_ID/runs
+curl http://127.0.0.1:4317/v1/runs/RUN_ID
 curl http://127.0.0.1:4317/v1/usage
 curl http://127.0.0.1:4317/v1/runs/RUN_ID/provenance
 curl http://127.0.0.1:4317/v1/runs/RUN_ID/worker-execution-manifests
@@ -56,9 +67,11 @@ The current implementation is a durable kernel spike. It persists sessions,
 runs, immutable run and worker-execution provenance manifests, operations,
 model attempts, normalized context projections, provider request/event
 artifacts, records, command receipts, and an event outbox in SQLite. It
-recovers abandoned work after restart and routes default read,
-directory-listing, regex-search, full-file write, unified-diff patch, shell, and
-Git-status tools through a typed workspace worker. Large successful tool output
+recovers abandoned work after restart and routes default `read`, `glob`,
+`grep`, `edit`, `write`, `apply_patch`, `bash`, `git_status`, `git_diff`, and
+bounded textual `web_fetch` tools through a typed workspace worker. The older
+`list`, `search`, and `shell` names remain available for pre-stable durable
+session compatibility. Large successful tool output
 is retained as an operation-owned artifact while only a bounded head/tail
 projection and `artifact://` reference enter model context.
 A fake provider supports deterministic tests. OpenRouter Chat Completions and
@@ -197,6 +210,32 @@ Complete records, attempts, normalized contexts and usage, and provider
 artifacts remain under `.car/` and are available through the daemon inspection
 endpoints.
 
+### Context projection and pruning
+
+The default runtime applies a provider-neutral context transform before each
+provider request. Durable records and artifacts remain unchanged. Once 20
+successful, non-protected tool exchanges are visible, the transform replaces
+the oldest ten tool-result outputs with a fixed tombstone and keeps the newest
+ten intact. It advances in batches of ten rather than changing the old prefix
+on every call. Tool call IDs, names, inputs, result pairing, errors, and durable
+artifact references are preserved.
+
+Every context projection records transform identity/version/configuration,
+input/output hashes, and per-result decisions. The immutable run provenance
+records the configured transform set. The web inspector exposes this data.
+Configure or disable the default policy before starting the daemon:
+
+```bash
+export CAR_CONTEXT_TOOL_RESULT_PRUNING=on # or off
+export CAR_CONTEXT_PRUNE_TRIGGER=20
+export CAR_CONTEXT_RETAIN_TOOL_RESULTS=10
+export CAR_CONTEXT_PRUNE_BATCH=10
+export CAR_CONTEXT_PROTECTED_TOOLS=skill,todo,plan
+```
+
+This deterministic payload pruning is separate from future model-generated
+summarization and provider-specific raw-request hooks.
+
 The default model is the verified paid route `google/gemma-4-26b-a4b-it`. Set
 `CAR_OPENROUTER_MODEL=google/gemma-4-26b-a4b-it:free` to try the free route;
 free endpoint availability is not guaranteed. HTTP 429 responses are terminal
@@ -205,10 +244,10 @@ SSE; every decoded chunk is retained before text and indexed tool-call deltas
 are assembled. Redacted replay fixtures cover success, a tool loop, 429, 5xx,
 malformed arguments, and cancellation without requiring credentials in CI.
 
-The daemon remains available through `just start`, but an external ingress is
-not required for this local inspection workflow. If a UI is added later, DIM
-can expose its container port with `dim external-url request --ingress NAME`;
-the ingress itself must first be configured by the DIM host administrator.
+An external ingress is not required for the local web workflow. DIM can expose
+the daemon and its same-origin web client with
+`dim external-url request --ingress NAME`; the ingress itself must first be
+configured by the DIM host administrator.
 
 ## Developing with DIM
 
