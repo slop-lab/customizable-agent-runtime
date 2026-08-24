@@ -44,7 +44,8 @@ test("daemon recovers persisted session history after a process restart", async 
   assert.equal(provenance.manifest.driver.configuration.maximumAttempts, 12);
   assert.equal(provenance.manifest.provider.transport.id, "core.transport.in-process");
   assert.deepEqual(provenance.manifest.tools.map((tool) => tool.id),
-    ["apply_patch", "git_status", "list", "read", "search", "shell", "write"]);
+    ["apply_patch", "bash", "edit", "git_diff", "git_status", "glob", "grep", "list", "read", "search",
+      "shell", "web_fetch", "write"]);
   assert.equal(provenance.manifestHash.length, 64);
   assert.equal((await fetch(`http://127.0.0.1:${port}/v1/runs/missing/provenance`)).status, 404);
   const workerManifestsResponse = await fetch(

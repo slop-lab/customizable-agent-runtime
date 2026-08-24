@@ -42,7 +42,7 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
     try {
       if (request.type === "readFile") {
         const path = await this.#resolve(request.path, request.cwd);
-        const output = await readFile(path, "utf8");
+        const output = selectLines(await readFile(path, "utf8"), request.offset, request.limit);
         return this.#output(request, output);
       }
       if (request.type === "list") {
@@ -52,21 +52,51 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
           .map((entry) => `${entry.name}${entry.isDirectory() ? "/" : ""}`).join("\n");
         return this.#output(request, output, { entries: entries.length });
       }
+      if (request.type === "glob") {
+        const cwd = await this.#resolve(".", request.cwd);
+        const path = await this.#resolve(request.path ?? ".", request.cwd);
+        const result = await execFileAsync("rg", ["--files", "--color=never", "--glob", request.pattern,
+          "--", relative(cwd, path) || "."], {
+          cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
+        });
+        const lines = result.stdout.split("\n").filter(Boolean).sort().slice(0, request.maxResults ?? 200);
+        return this.#output(request, lines.join("\n"), { matches: lines.length });
+      }
       if (request.type === "search") {
         const cwd = await this.#resolve(".", request.cwd);
         const path = await this.#resolve(request.path ?? ".", request.cwd);
         try {
-          const result = await execFileAsync("rg", ["--line-number", "--with-filename", "--color=never", "--no-heading",
-            "--", request.query, relative(cwd, path) || "."], {
+          const arguments_ = ["--line-number", "--with-filename", "--color=never", "--no-heading"];
+          if (request.include !== undefined) arguments_.push("--glob", request.include);
+          if (request.before !== undefined) arguments_.push("--before-context", String(request.before));
+          if (request.after !== undefined) arguments_.push("--after-context", String(request.after));
+          arguments_.push("--", request.query, relative(cwd, path) || ".");
+          const result = await execFileAsync("rg", arguments_, {
             cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
           });
-          const output = `${result.stdout}${result.stderr}`;
-          return this.#output(request, output, { matches: lineCount(result.stdout) });
+          const output = limitLines(`${result.stdout}${result.stderr}`, request.maxResults ?? 200);
+          return this.#output(request, output, { matches: lineCount(output) });
         } catch (error) {
           const value = error as { code?: string | number };
           if (value.code === 1) return { ok: true, output: "", metadata: { matches: 0 } };
           throw error;
         }
+      }
+      if (request.type === "editFile") {
+        const root = await this.#root;
+        const path = await this.#resolve(request.path, request.cwd);
+        const content = await readFile(path, "utf8");
+        const occurrences = countOccurrences(content, request.oldText);
+        if (occurrences === 0) return failure("worker-failed", "oldText was not found");
+        if (!request.replaceAll && occurrences !== 1) {
+          return failure("worker-failed", `oldText matched ${occurrences} times; set replaceAll to replace every match`);
+        }
+        const output = request.replaceAll
+          ? content.split(request.oldText).join(request.newText)
+          : content.replace(request.oldText, request.newText);
+        await writeFile(path, output, { encoding: "utf8", signal });
+        return { ok: true, output: `Edited ${relative(root, path) || "."}`,
+          metadata: { replacements: request.replaceAll ? occurrences : 1 } };
       }
       if (request.type === "writeFile") {
         const root = await this.#root;
@@ -95,17 +125,38 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
         });
         return this.#output(request, `${result.stdout}${result.stderr}`);
       }
-      const cwd = await this.#resolve(".", request.cwd);
-      const result = await execFileAsync("/bin/sh", ["-lc", request.command], {
-        cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
-      });
-      return this.#output(request, `${result.stdout}${result.stderr}`);
+      if (request.type === "gitDiff") {
+        const cwd = await this.#resolve(".", request.cwd);
+        const arguments_ = ["diff", ...(request.staged ? ["--cached"] : []), "--no-ext-diff"];
+        if (request.path !== undefined) {
+          const path = await this.#resolve(request.path, request.cwd);
+          arguments_.push("--", relative(cwd, path) || ".");
+        }
+        const result = await execFileAsync("git", arguments_, {
+          cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
+        });
+        return this.#output(request, `${result.stdout}${result.stderr}`);
+      }
+      if (request.type === "webFetch") {
+        const output = await fetchText(request.url, request.maxBytes ?? 262_144,
+          AbortSignal.any([signal, AbortSignal.timeout(remaining)]));
+        return this.#output(request, output);
+      }
+      if (request.type === "shell") {
+        const cwd = await this.#resolve(".", request.cwd);
+        const result = await execFileAsync("/bin/sh", ["-lc", request.command], {
+          cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
+        });
+        return this.#output(request, `${result.stdout}${result.stderr}`);
+      }
+      return failure("worker-failed", "Unsupported worker request");
     } catch (error) {
       const uncertain = isSideEffecting(request);
       if (signal.aborted) return failure("cancelled", "Operation was cancelled", uncertain);
-      const value = error as { code?: string | number; killed?: boolean; message?: string; stdout?: string; stderr?: string };
+      const value = error as { code?: string | number; killed?: boolean; message?: string; name?: string;
+        stdout?: string; stderr?: string };
       if (value.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return failure("output-limit", "Worker output exceeds limit", uncertain);
-      if (value.killed) return failure("timeout", "Shell operation timed out", true);
+      if (value.killed || value.name === "TimeoutError") return failure("timeout", "Worker operation timed out", uncertain);
       if (value.code === "CAR_INVALID_SCOPE") return failure("invalid-scope", value.message ?? "Path is outside workspace");
       return failure("worker-failed", value.message ?? String(error), uncertain);
     }
@@ -175,7 +226,66 @@ function lineCount(value: string): number {
   return value.length === 0 ? 0 : value.split("\n").length - (value.endsWith("\n") ? 1 : 0);
 }
 function isSideEffecting(request: WorkerRequest): boolean {
-  return request.type === "writeFile" || request.type === "applyPatch" || request.type === "shell";
+  return request.type === "editFile" || request.type === "writeFile" || request.type === "applyPatch" ||
+    request.type === "shell";
+}
+
+function selectLines(value: string, offset = 1, limit?: number): string {
+  if (!Number.isSafeInteger(offset) || offset < 1 ||
+    (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1))) {
+    throw new Error("Invalid read range");
+  }
+  if (offset === 1 && limit === undefined) return value;
+  const trailingNewline = value.endsWith("\n");
+  const lines = value.split("\n");
+  if (trailingNewline) lines.pop();
+  const selected = lines.slice(offset - 1, limit === undefined ? undefined : offset - 1 + limit).join("\n");
+  return selected.length > 0 && trailingNewline && offset - 1 + (limit ?? lines.length) >= lines.length
+    ? `${selected}\n` : selected;
+}
+
+function limitLines(value: string, maximum: number): string {
+  if (!Number.isSafeInteger(maximum) || maximum < 1) throw new Error("Invalid result limit");
+  const lines = value.split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  const selected = lines.slice(0, maximum);
+  return selected.length === 0 ? "" : `${selected.join("\n")}\n`;
+}
+
+function countOccurrences(value: string, search: string): number {
+  if (search.length === 0) return 0;
+  let count = 0;
+  for (let index = 0; (index = value.indexOf(search, index)) !== -1; index += search.length) count++;
+  return count;
+}
+
+async function fetchText(rawUrl: string, maximumBytes: number, signal: AbortSignal): Promise<string> {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 1_048_576) {
+    throw new Error("webFetch maxBytes must be from 1 through 1048576");
+  }
+  const url = new URL(rawUrl);
+  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
+    throw new Error("webFetch requires an HTTP(S) URL without credentials");
+  }
+  const response = await fetch(url, { signal, headers: { accept: "text/*, application/json, application/xml;q=0.9" } });
+  if (!response.ok) throw new Error(`webFetch received HTTP ${response.status}`);
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "text/plain";
+  if (!contentType.startsWith("text/") && !contentType.includes("json") && !contentType.includes("xml") &&
+    !contentType.includes("javascript")) {
+    throw new Error(`webFetch does not project content type ${contentType}`);
+  }
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    bytes += chunk.value.byteLength;
+    if (bytes > maximumBytes) { await reader.cancel(); throw new Error(`webFetch response exceeds ${maximumBytes} bytes`); }
+    chunks.push(chunk.value);
+  }
+  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
 }
 
 function projectOutput(value: string, maximumBytes: number): string {

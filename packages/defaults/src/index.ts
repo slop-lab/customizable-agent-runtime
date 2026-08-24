@@ -214,12 +214,27 @@ export function createDefaultRuntime(options: DefaultRuntimeOptions = {}): Runti
 export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
   const read: Tool = {
     description: { name: "read", version: "1", description: "Read a UTF-8 file through the workspace worker.",
-      inputSchema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
-      validateInput: (input) => isPathInput(input) ? undefined : "Expected an object with a string path." },
+      inputSchema: { type: "object", properties: { path: { type: "string" }, offset: { type: "integer", minimum: 1 },
+        limit: { type: "integer", minimum: 1, maximum: 2_000 } }, required: ["path"] },
+      validateInput: (input) => isReadInput(input) ? undefined :
+        "Expected a string path and optional positive offset/limit." },
     async execute(input, context) {
-      const value = input as { path: string };
+      const value = input as { path: string; offset?: number; limit?: number };
       return toolResult(await worker.execute({ type: "readFile", operationId: context.operationId,
-        workspace: context.workspace, deadline: context.deadline, path: value.path }, context.signal));
+        workspace: context.workspace, deadline: context.deadline, path: value.path,
+        ...(value.offset === undefined ? {} : { offset: value.offset }),
+        ...(value.limit === undefined ? {} : { limit: value.limit }) }, context.signal));
+    },
+  };
+  const bash: Tool = {
+    description: { name: "bash", version: "1", description: "Run a non-interactive shell command through the workspace worker.",
+      inputSchema: { type: "object", properties: { command: { type: "string" }, cwd: { type: "string" } }, required: ["command"] },
+      validateInput: (input) => isCommandInput(input) ? undefined : "Expected an object with a string command." },
+    async execute(input, context) {
+      const value = input as { command: string; cwd?: string };
+      return toolResult(await worker.execute({ type: "shell", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline, command: value.command,
+        ...(value.cwd === undefined ? {} : { cwd: value.cwd }) }, context.signal));
     },
   };
   const shell: Tool = {
@@ -243,6 +258,20 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
         workspace: context.workspace, deadline: context.deadline, path: value.path ?? "." }, context.signal));
     },
   };
+  const glob: Tool = {
+    description: { name: "glob", version: "1", description: "Find workspace files matching a glob pattern.",
+      inputSchema: { type: "object", properties: { pattern: { type: "string" }, path: { type: "string" },
+        maxResults: { type: "integer", minimum: 1, maximum: 1_000 } }, required: ["pattern"] },
+      validateInput: (input) => isGlobInput(input) ? undefined :
+        "Expected a non-empty glob pattern and optional path/maxResults." },
+    async execute(input, context) {
+      const value = input as { pattern: string; path?: string; maxResults?: number };
+      return toolResult(await worker.execute({ type: "glob", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline, pattern: value.pattern,
+        ...(value.path === undefined ? {} : { path: value.path }),
+        ...(value.maxResults === undefined ? {} : { maxResults: value.maxResults }) }, context.signal));
+    },
+  };
   const search: Tool = {
     description: { name: "search", version: "1", description: "Search workspace text with a regular expression through the workspace worker.",
       inputSchema: { type: "object", properties: { query: { type: "string" }, path: { type: "string" } }, required: ["query"] },
@@ -252,6 +281,39 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
       return toolResult(await worker.execute({ type: "search", operationId: context.operationId,
         workspace: context.workspace, deadline: context.deadline, query: value.query,
         ...(value.path === undefined ? {} : { path: value.path }) }, context.signal));
+    },
+  };
+  const grep: Tool = {
+    description: { name: "grep", version: "1", description: "Search workspace text with ripgrep-compatible regular expressions.",
+      inputSchema: { type: "object", properties: { query: { type: "string" }, path: { type: "string" },
+        include: { type: "string" }, before: { type: "integer", minimum: 0, maximum: 50 },
+        after: { type: "integer", minimum: 0, maximum: 50 },
+        maxResults: { type: "integer", minimum: 1, maximum: 1_000 } }, required: ["query"] },
+      validateInput: (input) => isGrepInput(input) ? undefined :
+        "Expected a non-empty query and valid optional path/include/context/result limits." },
+    async execute(input, context) {
+      const value = input as { query: string; path?: string; include?: string; before?: number; after?: number;
+        maxResults?: number };
+      return toolResult(await worker.execute({ type: "search", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline, query: value.query,
+        ...(value.path === undefined ? {} : { path: value.path }),
+        ...(value.include === undefined ? {} : { include: value.include }),
+        ...(value.before === undefined ? {} : { before: value.before }),
+        ...(value.after === undefined ? {} : { after: value.after }),
+        ...(value.maxResults === undefined ? {} : { maxResults: value.maxResults }) }, context.signal));
+    },
+  };
+  const edit: Tool = {
+    description: { name: "edit", version: "1", description: "Replace one exact UTF-8 text occurrence, or all matches when explicitly requested.",
+      inputSchema: { type: "object", properties: { path: { type: "string" }, oldText: { type: "string", minLength: 1 },
+        newText: { type: "string" }, replaceAll: { type: "boolean" } }, required: ["path", "oldText", "newText"] },
+      validateInput: (input) => isEditInput(input) ? undefined :
+        "Expected path, non-empty oldText, newText, and optional boolean replaceAll." },
+    async execute(input, context) {
+      const value = input as { path: string; oldText: string; newText: string; replaceAll?: boolean };
+      return toolResult(await worker.execute({ type: "editFile", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline, path: value.path, oldText: value.oldText,
+        newText: value.newText, ...(value.replaceAll === undefined ? {} : { replaceAll: value.replaceAll }) }, context.signal));
     },
   };
   const write: Tool = {
@@ -284,7 +346,36 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
         workspace: context.workspace, deadline: context.deadline }, context.signal));
     },
   };
-  return [read, list, search, write, applyPatch, shell, gitStatus];
+  const gitDiff: Tool = {
+    description: { name: "git_diff", version: "1", description: "Show the working-tree or staged Git diff.",
+      inputSchema: { type: "object", properties: { path: { type: "string" }, cwd: { type: "string" },
+        staged: { type: "boolean" } } },
+      validateInput: (input) => isGitDiffInput(input) ? undefined :
+        "Expected optional string path/cwd and optional boolean staged." },
+    async execute(input, context) {
+      const value = input as { path?: string; cwd?: string; staged?: boolean };
+      return toolResult(await worker.execute({ type: "gitDiff", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline,
+        ...(value.path === undefined ? {} : { path: value.path }),
+        ...(value.cwd === undefined ? {} : { cwd: value.cwd }),
+        ...(value.staged === undefined ? {} : { staged: value.staged }) }, context.signal));
+    },
+  };
+  const webFetch: Tool = {
+    description: { name: "web_fetch", version: "1", description: "Fetch bounded textual content from an HTTP(S) URL.",
+      inputSchema: { type: "object", properties: { url: { type: "string" },
+        maxBytes: { type: "integer", minimum: 1, maximum: 1_048_576 } }, required: ["url"] },
+      validateInput: (input) => isWebFetchInput(input) ? undefined :
+        "Expected an HTTP(S) URL without credentials and optional maxBytes up to 1048576." },
+    async execute(input, context) {
+      const value = input as { url: string; maxBytes?: number };
+      return toolResult(await worker.execute({ type: "webFetch", operationId: context.operationId,
+        workspace: context.workspace, deadline: context.deadline, url: value.url,
+        ...(value.maxBytes === undefined ? {} : { maxBytes: value.maxBytes }) }, context.signal));
+    },
+  };
+  return [read, glob, grep, edit, write, applyPatch, bash, gitStatus, gitDiff, webFetch,
+    list, search, shell];
 }
 
 function toolResult(response: WorkerResponse) {
@@ -297,8 +388,12 @@ function toolResult(response: WorkerResponse) {
       ...(response.lease === undefined ? {} : { workerLease: response.lease }),
       ...(response.executionManifest === undefined ? {} : { workerExecutionManifest: response.executionManifest }) });
 }
+function isReadInput(input: unknown): input is { path: string; offset?: number; limit?: number } {
+  return isPathInput(input) && optionalInteger(input, "offset", 1, Number.MAX_SAFE_INTEGER) &&
+    optionalInteger(input, "limit", 1, 2_000);
+}
 function isPathInput(input: unknown): input is { path: string } {
-  return typeof input === "object" && input !== null && "path" in input && typeof (input as { path?: unknown }).path === "string";
+  return isObject(input) && typeof input.path === "string";
 }
 function isCommandInput(input: unknown): input is { command: string; cwd?: string } {
   if (typeof input !== "object" || input === null || !("command" in input) || typeof (input as { command?: unknown }).command !== "string") return false;
@@ -314,6 +409,21 @@ function isSearchInput(input: unknown): input is { query: string; path?: string 
   return !("path" in input) || (input as { path?: unknown }).path === undefined ||
     typeof (input as { path?: unknown }).path === "string";
 }
+function isGlobInput(input: unknown): input is { pattern: string; path?: string; maxResults?: number } {
+  return isObject(input) && typeof input.pattern === "string" && input.pattern.length > 0 &&
+    optionalString(input, "path") && optionalInteger(input, "maxResults", 1, 1_000);
+}
+function isGrepInput(input: unknown): input is { query: string; path?: string; include?: string; before?: number;
+  after?: number; maxResults?: number } {
+  return isObject(input) && typeof input.query === "string" && input.query.length > 0 && optionalString(input, "path") &&
+    optionalString(input, "include") && optionalInteger(input, "before", 0, 50) &&
+    optionalInteger(input, "after", 0, 50) && optionalInteger(input, "maxResults", 1, 1_000);
+}
+function isEditInput(input: unknown): input is { path: string; oldText: string; newText: string; replaceAll?: boolean } {
+  return isObject(input) && typeof input.path === "string" && typeof input.oldText === "string" &&
+    input.oldText.length > 0 && typeof input.newText === "string" &&
+    (input.replaceAll === undefined || typeof input.replaceAll === "boolean");
+}
 function isWriteInput(input: unknown): input is { path: string; content: string } {
   return typeof input === "object" && input !== null && "path" in input && "content" in input &&
     typeof (input as { path?: unknown }).path === "string" && typeof (input as { content?: unknown }).content === "string";
@@ -324,6 +434,27 @@ function isPatchInput(input: unknown): input is { patch: string } {
 }
 function isEmptyObject(input: unknown): input is Record<string, never> {
   return typeof input === "object" && input !== null && !Array.isArray(input) && Object.keys(input).length === 0;
+}
+function isGitDiffInput(input: unknown): input is { path?: string; cwd?: string; staged?: boolean } {
+  return isObject(input) && optionalString(input, "path") && optionalString(input, "cwd") &&
+    (input.staged === undefined || typeof input.staged === "boolean");
+}
+function isWebFetchInput(input: unknown): input is { url: string; maxBytes?: number } {
+  if (!isObject(input) || typeof input.url !== "string" || !optionalInteger(input, "maxBytes", 1, 1_048_576)) return false;
+  try {
+    const url = new URL(input.url);
+    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password;
+  } catch { return false; }
+}
+function isObject(input: unknown): input is Record<string, unknown> {
+  return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+function optionalString(input: Readonly<Record<string, unknown>>, key: string): boolean {
+  return input[key] === undefined || typeof input[key] === "string";
+}
+function optionalInteger(input: Readonly<Record<string, unknown>>, key: string, minimum: number, maximum: number): boolean {
+  const value = input[key];
+  return value === undefined || Number.isSafeInteger(value) && Number(value) >= minimum && Number(value) <= maximum;
 }
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;

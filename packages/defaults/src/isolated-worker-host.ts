@@ -58,7 +58,8 @@ async function handleMessage(message: IsolatedWorkerHostMessage): Promise<void> 
       isolation: { kind: "process", filesystem: "workspace-scoped", environment: "explicit-projection" },
       resourceLimits: { maximumInlineOutputBytes: configuration.maximumInlineOutputBytes,
         maximumArtifactBytes: configuration.maximumArtifactBytes },
-      requestTypes: ["readFile", "list", "search", "writeFile", "applyPatch", "shell", "gitStatus"],
+      requestTypes: ["readFile", "list", "glob", "search", "editFile", "writeFile", "applyPatch", "shell",
+        "gitStatus", "gitDiff", "webFetch"],
     });
     send({ type: "ready", lease, executionManifest });
     return;

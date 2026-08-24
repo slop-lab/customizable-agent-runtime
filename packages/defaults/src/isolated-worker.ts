@@ -263,7 +263,8 @@ function createDeferred<T>(): Deferred<T> {
 
 function leaseExpired(lease: WorkerLease): boolean { return Date.now() >= Date.parse(lease.expiresAt); }
 function sideEffecting(request: WorkerRequest): boolean {
-  return request.type === "writeFile" || request.type === "applyPatch" || request.type === "shell";
+  return request.type === "editFile" || request.type === "writeFile" || request.type === "applyPatch" ||
+    request.type === "shell";
 }
 function failed(request: WorkerRequest, message: string): WorkerResponse {
   return { ok: false, code: "worker-failed", message, uncertain: sideEffecting(request) };

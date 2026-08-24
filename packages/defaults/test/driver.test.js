@@ -15,7 +15,8 @@ test("runtime source revision is host-injected through a provenance option", () 
 test("default runtime exposes the complete development workspace tool set", async () => {
   const runtime = createDefaultRuntime({ worker: new FakeWorker(() => ({ ok: true, output: "unused" })) });
   assert.deepEqual(runtime.capabilities().tools.map((tool) => tool.name),
-    ["read", "list", "search", "write", "apply_patch", "shell", "git_status"]);
+    ["read", "glob", "grep", "edit", "write", "apply_patch", "bash", "git_status", "git_diff", "web_fetch",
+      "list", "search", "shell"]);
   await runtime.close();
 });
 

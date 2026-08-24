@@ -12,6 +12,9 @@ function fixture(options = {}) {
   const root = mkdtempSync(join(tmpdir(), "car-isolated-worker-"));
   execFileSync("git", ["init", "-q"], { cwd: root });
   writeFileSync(join(root, "hello.txt"), "hello worker");
+  execFileSync("git", ["add", "hello.txt"], { cwd: root });
+  execFileSync("git", ["-c", "user.name=CAR", "-c", "user.email=car@example.test", "commit", "-qm", "fixture"],
+    { cwd: root });
   const ingress = new ArtifactIngressStore(join(root, ".ingress"), 4_096);
   const worker = new ProcessIsolatedWorker({ workspace: "workspace", root, artifactIngress: ingress,
     maximumInlineOutputBytes: 1_024, maximumArtifactBytes: 4_096, ...options });

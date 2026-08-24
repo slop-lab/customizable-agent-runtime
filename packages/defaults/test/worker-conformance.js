@@ -11,13 +11,25 @@ export function workerConformance(name, create) {
       assert.equal(read.ok, true); assert.equal(read.output, "hello worker");
       const listed = await worker.execute({ ...base, type: "list", path: "." }, signal);
       assert.equal(listed.ok, true); assert.match(listed.output, /hello\.txt/);
-      const searched = await worker.execute({ ...base, type: "search", query: "hello", path: "." }, signal);
+      const globbed = await worker.execute({ ...base, type: "glob", pattern: "*.txt", path: "." }, signal);
+      assert.equal(globbed.ok, true); assert.match(globbed.output, /hello\.txt/);
+      const searched = await worker.execute({ ...base, type: "search", query: "hello", path: ".",
+        include: "*.txt", maxResults: 10 }, signal);
       assert.equal(searched.ok, true); assert.match(searched.output, /hello\.txt.*hello worker/);
       assert.equal((await worker.execute({ ...base, type: "search", query: "missing", path: "." }, signal)).output, "");
       assert.equal((await worker.execute({ ...base, type: "writeFile", path: "nested/written.txt",
         content: "written worker" }, signal)).ok, true);
       const written = await worker.execute({ ...base, type: "readFile", path: "nested/written.txt" }, signal);
       assert.equal(written.ok, true); assert.equal(written.output, "written worker");
+      await worker.execute({ ...base, type: "writeFile", path: "nested/lines.txt",
+        content: "one\ntwo\nthree\n" }, signal);
+      assert.equal((await worker.execute({ ...base, type: "readFile", path: "nested/lines.txt",
+        offset: 2, limit: 1 }, signal)).output, "two");
+      const edited = await worker.execute({ ...base, type: "editFile", path: "hello.txt",
+        oldText: "worker", newText: "edited" }, signal);
+      assert.equal(edited.ok, true);
+      assert.equal((await worker.execute({ ...base, type: "readFile", path: "hello.txt" }, signal)).output,
+        "hello edited");
       const patch = "diff --git a/patched.txt b/patched.txt\nnew file mode 100644\n--- /dev/null\n+++ b/patched.txt\n" +
         "@@ -0,0 +1 @@\n+patched worker\n";
       assert.equal((await worker.execute({ ...base, type: "applyPatch", patch }, signal)).ok, true);
@@ -27,6 +39,8 @@ export function workerConformance(name, create) {
       assert.equal(shell.ok, true); assert.equal(shell.output, "shell");
       const status = await worker.execute({ ...base, type: "gitStatus" }, signal);
       assert.equal(status.ok, true); assert.match(status.output, /hello\.txt/);
+      const diff = await worker.execute({ ...base, type: "gitDiff", path: "hello.txt" }, signal);
+      assert.equal(diff.ok, true); assert.match(diff.output, /hello edited/);
       assert.equal((await worker.execute({ ...base, type: "readFile", path: "hello.txt", workspace: "other" }, signal)).code, "invalid-scope");
     } finally { cleanup(); }
   });
