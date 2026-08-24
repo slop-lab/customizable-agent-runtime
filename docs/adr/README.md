@@ -7,6 +7,7 @@
 - [0005: Worker artifact ingress and process lifecycle](0005-worker-artifact-ingress-and-process-lifecycle.md)
 - [0006: Trusted plugin host and external integrations](0006-trusted-plugin-host-and-external-integrations.md)
 - [0007: Bounded remote MCP tool plugin](0007-bounded-remote-mcp-tool-plugin.md)
+- [0008: Functional web client, coding tools, and context transforms](0008-web-client-tool-parity-and-context-transforms.md)
 
 ADRs record decisions that constrain multiple subsystems. Replace an accepted
 decision with a superseding ADR rather than silently changing its rationale.
