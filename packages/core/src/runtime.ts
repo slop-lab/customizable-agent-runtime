@@ -15,7 +15,7 @@ import {
 import type {
   RecordEntry, RecordKind, Run, RunSummary, RuntimeEvent, Session, SessionSummary, ToolResult,
 } from "./contracts.js";
-import { DefaultContextProjector } from "./context-projector.js";
+import { ContextTransformFailure, DefaultContextProjector } from "./context-projector.js";
 import type { Operation, OperationStatus } from "./domain.js";
 import { RuntimeError } from "./errors.js";
 import { RuntimeRepository } from "./persistence.js";
@@ -65,6 +65,8 @@ export interface RunExecution {
 
 export class Runtime {
   readonly #controllers = new Map<string, AbortController>();
+  readonly #pendingAdmissions = new Set<Promise<unknown>>();
+  readonly #activeRunCompletions = new Set<Promise<Run>>();
   readonly #listeners = new Set<(event: RuntimeEvent) => void>();
   readonly #system: RuntimeSystem;
   readonly #database: KernelDatabase;
@@ -114,15 +116,16 @@ export class Runtime {
   }
 
   async createSession(idempotencyKey = `session:${this.#system.ids.next()}`): Promise<Session> {
-    const session = await this.#database.writer.run(() => {
+    this.#assertOpen();
+    const admission = this.#database.writer.run(() => {
       const now = this.#system.clock.now();
       return this.#repository.command(idempotencyKey, now, () => {
         const value = { id: this.#system.ids.next(), createdAt: now };
         this.#repository.createSession(value, this.#event("session.created", value));
         return value;
       });
-    });
-    this.#publishPending(); return session;
+    }).then((session) => { this.#publishPending(); return session; });
+    return this.#trackAdmission(admission);
   }
 
   getSession(id: string): Session | undefined { return this.#repository.getSession(id); }
@@ -168,13 +171,13 @@ export class Runtime {
         id: plugin.id, version: plugin.version, dependencies: plugin.dependencies,
       })), contextTransforms: this.#contextTransforms.map((transform) => ({ id: transform.id,
         version: transform.version, ...(transform.configuration === undefined ? {} : {
-          configuration: transform.configuration,
+          configuration: this.#redactor.redact(transform.configuration) as JsonObject,
         }) })) } as const;
   }
 
   subscribe(listener: (event: RuntimeEvent) => void): () => void {
     this.#listeners.add(listener);
-    try { this.#publishPending(); } catch (error) { this.#listeners.delete(listener); throw error; }
+    try { this.#publishPending(true); } catch (error) { this.#listeners.delete(listener); throw error; }
     return () => this.#listeners.delete(listener);
   }
 
@@ -190,11 +193,20 @@ export class Runtime {
   }
 
   async startRun(sessionId: string, input: string): Promise<RunExecution> {
+    this.#assertOpen();
     if (!this.getSession(sessionId)) throw new RuntimeError("not-found", `Unknown session: ${sessionId}`);
+    return this.#trackAdmission(this.#admitRun(sessionId, input));
+  }
+
+  async #admitRun(sessionId: string, input: string): Promise<RunExecution> {
     const controller = new AbortController();
     const started = await this.#startRun(sessionId, input);
-    this.#controllers.set(started.run.id, controller); this.#publishPending();
+    this.#controllers.set(started.run.id, controller);
     const completion = this.#executeRun(sessionId, started, controller);
+    this.#activeRunCompletions.add(completion);
+    void completion.then(() => this.#activeRunCompletions.delete(completion),
+      () => this.#activeRunCompletions.delete(completion));
+    this.#publishPending();
     return { run: started.run, completion, cancel: () => this.cancelRun(started.run.id) };
   }
 
@@ -229,7 +241,12 @@ export class Runtime {
     if (this.#closed) return;
     this.#closed = true;
     const errors: unknown[] = [];
+    await Promise.allSettled([...this.#pendingAdmissions]);
     for (const controller of this.#controllers.values()) controller.abort(new Error("Runtime closed"));
+    const completions = await Promise.allSettled([...this.#activeRunCompletions]);
+    for (const completion of completions) {
+      if (completion.status === "rejected") errors.push(completion.reason);
+    }
     for (const close of this.#closeResources) {
       try { await close(); } catch (error) { errors.push(error); }
     }
@@ -239,6 +256,17 @@ export class Runtime {
       catch (error) { errors.push(error); }
     }
     if (errors.length > 0) throw new AggregateError(errors, "Runtime cleanup failed");
+  }
+
+  #assertOpen(): void {
+    if (this.#closed) throw new RuntimeError("conflict", "Runtime is closed");
+  }
+
+  #trackAdmission<T>(admission: Promise<T>): Promise<T> {
+    this.#pendingAdmissions.add(admission);
+    void admission.then(() => this.#pendingAdmissions.delete(admission),
+      () => this.#pendingAdmissions.delete(admission));
+    return admission;
   }
 
   async #startRun(sessionId: string, input: string): Promise<{ run: Run; operation: Operation }> {
@@ -275,8 +303,34 @@ export class Runtime {
     const now = this.#system.clock.now();
     const attemptId = this.#system.ids.next();
     const operation: Operation = { id: this.#system.ids.next(), runId, kind: "model", status: "running", startedAt: now };
-    const context = this.#projector.project(this.#system.ids.next(), runId, this.getRecords(sessionId), now,
-      { attemptNumber, transforms: this.#contextTransforms });
+    let context: ContextProjection;
+    try {
+      context = this.#projector.project(this.#system.ids.next(), runId, this.getRecords(sessionId), now,
+        { attemptNumber, transforms: this.#contextTransforms, redact: (value) => this.#redactor.redact(value) });
+    } catch (error) {
+      if (!(error instanceof ContextTransformFailure)) throw error;
+      const providerError = new ProviderInvocationError("context.transform", error.message, false,
+        { transformId: error.transformId });
+      const endedAt = this.#system.clock.now();
+      await this.#database.writer.run(() => {
+        this.#repository.saveContextProjection(error.projection);
+        this.#repository.createOperation(operation, this.#event("operation.started", operation));
+        this.#repository.createModelAttempt({ id: attemptId, runId, operationId: operation.id, attemptNumber,
+          ...(existing.at(-1) ? { previousAttemptId: existing.at(-1)!.id } : {}),
+          contextProjectionId: error.projection.id,
+          ...(options.retryOfAttemptId === undefined ? {} : { retryOfAttemptId: options.retryOfAttemptId }),
+          providerProfile: this.provider.profile, capabilities: this.provider.capabilities,
+          status: "running", startedAt: now });
+        this.#repository.finishModelAttempt(attemptId, "failed", { endedAt,
+          error: { code: providerError.code, message: providerError.message, retryable: false,
+            transformId: error.transformId } });
+        this.#repository.finishOperation(operation.id, "failed", endedAt,
+          this.#event("operation.finished", { ...operation, status: "failed", endedAt,
+            error: providerError.message }), undefined, providerError.message);
+      });
+      this.#publishPending();
+      throw new ModelAttemptFailure(attemptId, providerError);
+    }
     const ownership = { type: "model-attempt", id: attemptId, runId } as const;
     const requestWriter = this.#artifactStore.create(this.#system.ids.next(), "provider-request", "application/json", now,
       ownership);
@@ -468,10 +522,16 @@ export class Runtime {
     return { id: this.#system.ids.next(), type, data, occurredAt: this.#system.clock.now() };
   }
 
-  #publishPending(): void {
+  #publishPending(propagateListenerFailure = false): void {
     if (this.#listeners.size === 0) return;
     for (const event of this.#repository.pendingEvents()) {
-      for (const listener of this.#listeners) listener(event);
+      for (const listener of this.#listeners) {
+        try { listener(event); } catch (error) {
+          this.#listeners.delete(listener);
+          if (propagateListenerFailure) throw error;
+          return;
+        }
+      }
       this.#repository.markPublished(event.sequence, this.#system.clock.now());
     }
   }

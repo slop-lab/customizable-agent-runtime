@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import {
   DefaultContextProjector,
@@ -30,6 +31,7 @@ test("old tool results are replaced in stable batches without mutating records",
   assert.deepEqual(results.slice(10).map((value) => value.output),
     Array.from({ length: 19 }, (_, index) => `payload-${index + 11}`));
   assert.equal(projection.transformations.length, 1);
+  assert.equal(projection.transformations[0].status, "applied");
   assert.equal(projection.transformations[0].decisions.length, 10);
   assert.equal(projection.transformations[0].decisions[0].callId, "call-1");
   assert.equal(projection.transformations[0].inputHash.length, 64);
@@ -63,5 +65,32 @@ test("context transforms cannot leave an orphan tool result", () => {
     return { content: content.filter((value) => value.type !== "tool-call"), decisions: [] };
   } };
   assert.throws(() => new DefaultContextProjector().project("context", "run", toolRecords(1), "now",
-    { transforms: [invalid] }), /no preceding call/);
+    { transforms: [invalid] }), (error) => error.name === "ContextTransformFailure" &&
+      /no preceding call/.test(error.cause.message));
+});
+
+test("context transform input mutation cannot corrupt a failed projection", () => {
+  const mutating = { id: "test.mutating", version: "1", transform({ content }) {
+    content[0].text = "tampered";
+    throw new Error("after mutation");
+  } };
+  let failure;
+  try {
+    new DefaultContextProjector().project("context", "run", toolRecords(0), "now", { transforms: [mutating] });
+  } catch (error) {
+    failure = error;
+  }
+  assert.equal(failure?.name, "ContextTransformFailure");
+  assert.equal(failure.projection.content[0].text, "start");
+  const hash = createHash("sha256").update(JSON.stringify(failure.projection.content)).digest("hex");
+  assert.equal(failure.projection.requestHash, hash);
+  assert.equal(failure.projection.transformations[0].outputHash, hash);
+});
+
+test("context rejects tool-call IDs reused after a completed exchange", () => {
+  const records = toolRecords(2);
+  records[3] = { ...records[3], data: { ...records[3].data, callId: "call-1" } };
+  records[4] = { ...records[4], data: { ...records[4].data, callId: "call-1" } };
+  assert.throws(() => new DefaultContextProjector().project("context", "run", records, "now"),
+    /Duplicate tool call ID/);
 });

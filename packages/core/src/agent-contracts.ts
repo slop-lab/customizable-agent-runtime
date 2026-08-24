@@ -42,9 +42,11 @@ export interface AppliedContextTransform {
   readonly id: string;
   readonly version: string;
   readonly configuration?: JsonObject;
+  readonly status: "applied" | "failed";
   readonly inputHash: string;
   readonly outputHash: string;
   readonly decisions: readonly ContextTransformDecision[];
+  readonly error?: { readonly code: "context.transform-failed" };
 }
 
 export type CapabilityValue =

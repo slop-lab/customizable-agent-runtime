@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { createServer as createHttpServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -52,7 +51,6 @@ workerConformance("fake worker", () => {
     if (value.type === "applyPatch") { files.set("patched.txt", "patched worker\n"); return { ok: true, output: "patched" }; }
     if (value.type === "gitStatus") return { ok: true, output: "?? hello.txt" };
     if (value.type === "gitDiff") return { ok: true, output: "+hello edited" };
-    if (value.type === "webFetch") return { ok: true, output: "web" };
     return { ok: true, output: "shell" };
   }) };
 });
@@ -91,28 +89,4 @@ test("local worker enforces deadline, cancellation, and output limit", async () 
   const tooLarge = await worker.execute(request({ type: "shell", command: "printf 123456789" }), new AbortController().signal);
   assert.equal(tooLarge.code, "output-limit");
   rmSync(root, { recursive: true, force: true });
-});
-
-test("local worker fetches bounded textual HTTP content", async () => {
-  const server = createHttpServer((_request, response) => {
-    response.writeHead(200, { "content-type": "text/plain" });
-    response.end("worker web response");
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  const address = server.address();
-  assert.equal(typeof address, "object");
-  const { root, worker } = fixture();
-  try {
-    const response = await worker.execute(request({ type: "webFetch",
-      url: `http://127.0.0.1:${address.port}/`, maxBytes: 1_024 }), new AbortController().signal);
-    assert.equal(response.ok, true);
-    assert.equal(response.output, "worker web response");
-    const tooSmall = await worker.execute(request({ type: "webFetch",
-      url: `http://127.0.0.1:${address.port}/`, maxBytes: 4 }), new AbortController().signal);
-    assert.equal(tooSmall.ok, false);
-    assert.equal(tooSmall.code, "worker-failed");
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-  }
 });

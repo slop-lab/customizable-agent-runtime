@@ -24,8 +24,7 @@ export type WorkerRequest =
   | (WorkerRequestBase & { readonly type: "applyPatch"; readonly patch: string })
   | (WorkerRequestBase & { readonly type: "shell"; readonly command: string })
   | (WorkerRequestBase & { readonly type: "gitStatus" })
-  | (WorkerRequestBase & { readonly type: "gitDiff"; readonly path?: string; readonly staged?: boolean })
-  | (WorkerRequestBase & { readonly type: "webFetch"; readonly url: string; readonly maxBytes?: number });
+  | (WorkerRequestBase & { readonly type: "gitDiff"; readonly path?: string; readonly staged?: boolean });
 
 export interface WorkerLease {
   readonly id: string;

@@ -30,8 +30,7 @@ export interface RunProvenanceEnvironment {
   };
 }
 
-export interface RunProvenanceManifestV1 {
-  readonly version: 1;
+interface RunProvenanceManifestBase {
   readonly runId: string;
   readonly createdAt: string;
   readonly runtime: RuntimeComponentIdentity;
@@ -43,7 +42,6 @@ export interface RunProvenanceManifestV1 {
     readonly transport?: ComponentIdentity;
   };
   readonly contextProjector: ComponentIdentity;
-  readonly contextTransforms: readonly ConfiguredComponentIdentity[];
   readonly tools: readonly {
     readonly id: string;
     readonly version: string;
@@ -58,9 +56,20 @@ export interface RunProvenanceManifestV1 {
   readonly security: RunProvenanceEnvironment["security"];
 }
 
+export interface RunProvenanceManifestV1 extends RunProvenanceManifestBase {
+  readonly version: 1;
+}
+
+export interface RunProvenanceManifestV2 extends RunProvenanceManifestBase {
+  readonly version: 2;
+  readonly contextTransforms: readonly ConfiguredComponentIdentity[];
+}
+
+export type RunProvenanceManifest = RunProvenanceManifestV1 | RunProvenanceManifestV2;
+
 export interface StoredRunProvenance {
   readonly runId: string;
-  readonly manifest: RunProvenanceManifestV1;
+  readonly manifest: RunProvenanceManifest;
   readonly manifestHash: string;
   readonly createdAt: string;
 }
@@ -127,8 +136,8 @@ export interface CreateRunProvenanceInput {
 }
 
 export function createRunProvenance(input: CreateRunProvenanceInput): StoredRunProvenance {
-  const manifest = redacted<RunProvenanceManifestV1>({
-    version: 1,
+  const manifest = redacted<RunProvenanceManifestV2>({
+    version: 2,
     runId: input.runId,
     createdAt: input.createdAt,
     runtime: input.environment.runtime,

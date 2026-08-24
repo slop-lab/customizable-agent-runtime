@@ -12,6 +12,14 @@ import type { RecordEntry } from "./contracts.js";
 export interface ContextProjectionOptions {
   readonly attemptNumber?: number;
   readonly transforms?: readonly ContextTransform[];
+  readonly redact?: (value: unknown) => unknown;
+}
+
+export class ContextTransformFailure extends Error {
+  constructor(readonly projection: ContextProjection, readonly transformId: string, options?: ErrorOptions) {
+    super(`Context transform failed: ${transformId}`, options);
+    this.name = "ContextTransformFailure";
+  }
 }
 
 export class DefaultContextProjector {
@@ -31,15 +39,31 @@ export class DefaultContextProjector {
     let content: readonly NormalizedContent[] = projectedContent;
     validateToolStructure(content);
     const transformations: ContextProjection["transformations"][number][] = [];
+    const redact = options.redact ?? ((value: unknown) => value);
     for (const transform of options.transforms ?? []) {
       const inputHash = contentHash(content);
-      const result = transform.transform({ runId, attemptNumber: options.attemptNumber ?? 1, content });
-      assertTransformResult(transform, result);
-      content = [...result.content];
-      validateToolStructure(content);
-      transformations.push({ id: transform.id, version: transform.version,
-        ...(transform.configuration === undefined ? {} : { configuration: transform.configuration }),
-        inputHash, outputHash: contentHash(content), decisions: [...result.decisions] });
+      const configuration = transform.configuration === undefined ? {} : {
+        configuration: immutableSnapshot(redact(transform.configuration)) as JsonObject,
+      };
+      try {
+        const transformInput = immutableSnapshot(content) as readonly NormalizedContent[];
+        const result = transform.transform({ runId, attemptNumber: options.attemptNumber ?? 1,
+          content: transformInput });
+        assertTransformResult(transform, result);
+        const candidate = immutableSnapshot([...result.content]) as readonly NormalizedContent[];
+        validateToolStructure(candidate);
+        const outputHash = contentHash(candidate);
+        transformations.push({ id: transform.id, version: transform.version, status: "applied", ...configuration,
+          inputHash, outputHash,
+          decisions: immutableSnapshot(redact([...result.decisions])) as readonly ContextTransformDecision[] });
+        content = candidate;
+      } catch (error) {
+        transformations.push({ id: transform.id, version: transform.version, status: "failed", ...configuration,
+          inputHash, outputHash: inputHash, decisions: [], error: { code: "context.transform-failed" } });
+        throw new ContextTransformFailure({ id, runId, projectorId: this.id, projectorVersion: this.version,
+          includedRecordIds, excludedRecords, content, transformations,
+          requestHash: inputHash, createdAt }, transform.id, { cause: error });
+      }
     }
     const requestHash = contentHash(content);
     return { id, runId, projectorId: this.id, projectorVersion: this.version,
@@ -158,12 +182,17 @@ function assertTransformResult(transform: ContextTransform, result: ContextTrans
 
 function validateToolStructure(content: readonly NormalizedContent[]): void {
   const openCalls = new Set<string>();
+  const seenCallIds = new Set<string>();
+  const seenResultIds = new Set<string>();
   for (const item of content) {
     if (item.type === "tool-call") {
-      if (openCalls.has(item.callId)) throw new TypeError(`Duplicate open tool call ID in context: ${item.callId}`);
+      if (seenCallIds.has(item.callId)) throw new TypeError(`Duplicate tool call ID in context: ${item.callId}`);
+      seenCallIds.add(item.callId);
       openCalls.add(item.callId);
     }
     if (item.type === "tool-result") {
+      if (seenResultIds.has(item.callId)) throw new TypeError(`Duplicate tool result ID in context: ${item.callId}`);
+      seenResultIds.add(item.callId);
       if (!openCalls.delete(item.callId)) throw new TypeError(`Tool result has no preceding call in context: ${item.callId}`);
     }
   }
@@ -171,4 +200,17 @@ function validateToolStructure(content: readonly NormalizedContent[]): void {
 
 function jsonBytes(value: unknown): number {
   return Buffer.byteLength(JSON.stringify(value) ?? "undefined");
+}
+
+function immutableSnapshot<T>(value: T): T {
+  return deepFreeze(structuredClone(value));
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value)) return value;
+  for (const key of Reflect.ownKeys(value)) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor && "value" in descriptor) deepFreeze(descriptor.value);
+  }
+  return Object.freeze(value);
 }

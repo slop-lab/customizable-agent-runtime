@@ -43,8 +43,8 @@ The durable spike implements SQLite-backed sessions, runs, operations, records,
 command receipts, an event outbox, immutable run-provenance manifests, context
 and usage projections, model attempts, and provider artifacts. Its typed
 development worker supports ranged reads, glob discovery, bounded regex
-search, exact edits, full-file writes, unified-diff patches, shell, Git
-status/diff, and bounded textual HTTP fetches. Large tool output crosses a
+search, exact edits, full-file writes, unified-diff patches, shell, and Git
+status/diff. Large tool output crosses a
 hash/size/ownership-validated
 staging boundary into durable artifacts, and a second lazy child-process worker
 implements a versioned JSON-lines protocol, renewable leases, cancellation,
@@ -64,9 +64,11 @@ The model plane now applies ordered provider-neutral context transforms between
 record normalization and provider adaptation. Transform results are attempt
 projections only: records and artifacts remain authoritative and immutable.
 Each projection persists transform configuration, decisions, and input/output
-hashes. The default policy replaces old successful tool-result output in stable
-batches while preserving call/result structure. Model-generated summarization
-and provider-specific raw-request hooks remain separate future concerns.
+hashes. Failed transforms produce a failed projection and model attempt rather
+than disappearing before provider invocation. The default policy replaces old
+successful tool-result output in stable batches while preserving call/result
+structure. Model-generated summarization and provider-specific raw-request
+hooks remain separate future concerns.
 
 The spike now also has a pre-stable trusted plugin host. It validates explicit
 versioned manifests, orders dependencies deterministically, separates setup

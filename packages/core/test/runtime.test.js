@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
-import { createWorkerExecutionManifest, ProviderInvocationError } from "../dist/index.js";
+import { createWorkerExecutionManifest, KernelDatabase, ProviderInvocationError } from "../dist/index.js";
 import { appendOneTurnDriver, createTestRuntime, providerFrom } from "./agent-fixtures.js";
 
 function deterministicSystem() {
@@ -172,4 +173,114 @@ test("runtime close awaits every resource and reports aggregate cleanup failure"
   assert.deepEqual(log, ["first", "second"]);
   await assert.rejects(() => runtime.close(), AggregateError);
   assert.deepEqual(log, ["first", "second"]);
+});
+
+test("runtime close cancels and drains active runs before closing persistence", async () => {
+  let providerStarted;
+  const started = new Promise((resolve) => { providerStarted = resolve; });
+  const provider = providerFrom(async (request) => {
+    providerStarted();
+    await new Promise((_resolve, reject) => request.signal.addEventListener("abort",
+      () => reject(request.signal.reason), { once: true }));
+  });
+  const runtime = createTestRuntime(provider);
+  const session = await runtime.createSession("session");
+  const execution = await runtime.startRun(session.id, "close during provider");
+  await started;
+  const closing = runtime.close();
+  const run = await execution.completion;
+  await closing;
+  assert.equal(run.status, "cancelled");
+  await assert.rejects(() => runtime.createSession("after-close"), /Runtime is closed/);
+});
+
+test("runtime close drains pending run admission before cancelling execution", async () => {
+  const database = new KernelDatabase(":memory:");
+  let releaseWriter;
+  let writerStarted;
+  const writerReady = new Promise((resolve) => { writerStarted = resolve; });
+  const provider = providerFrom(async (request) => new Promise((_resolve, reject) => {
+    if (request.signal.aborted) { reject(request.signal.reason); return; }
+    request.signal.addEventListener("abort", () => reject(request.signal.reason), { once: true });
+  }));
+  const runtime = createTestRuntime(provider, [], { database });
+  const session = await runtime.createSession("session");
+  const blocker = database.writer.run(async () => {
+    writerStarted();
+    await new Promise((resolve) => { releaseWriter = resolve; });
+  });
+  await writerReady;
+  const starting = runtime.startRun(session.id, "close during admission");
+  const closing = runtime.close();
+  releaseWriter();
+  await blocker;
+  const execution = await starting;
+  const run = await execution.completion;
+  await closing;
+  assert.equal(run.status, "cancelled");
+});
+
+test("subscriber failure cannot interrupt admitted run execution", async () => {
+  const runtime = createTestRuntime(providerFrom(async () => ({
+    content: [{ type: "text", role: "assistant", text: "completed despite observer" }],
+  })));
+  const unsubscribe = runtime.subscribe(() => {});
+  const session = await runtime.createSession("session");
+  unsubscribe();
+  let failedEventId;
+  runtime.subscribe((event) => {
+    failedEventId = event.id;
+    throw new Error("observer failed");
+  });
+  const execution = await runtime.startRun(session.id, "continue after observer failure");
+  assert.equal((await execution.completion).status, "completed");
+  const replayed = [];
+  runtime.subscribe((event) => replayed.push(event));
+  assert.equal(replayed.some((event) => event.id === failedEventId && event.type === "run.started"), true);
+  await runtime.close();
+});
+
+test("runtime redacts transform configuration and decisions before inspection", async () => {
+  const transform = { id: "test.secret-transform", version: "1", configuration: { token: "secret-value" },
+    transform({ content }) { return { content, decisions: [
+      { action: "observe", reason: "test", token: "decision-secret" },
+    ] }; } };
+  const runtime = createTestRuntime(providerFrom(async () => ({ content: [] })), [], {
+    contextTransforms: [transform],
+  });
+  assert.equal(runtime.capabilities().contextTransforms[0].configuration.token, "[redacted]");
+  const session = await runtime.createSession("redaction-session");
+  const run = await runtime.run(session.id, "redact context metadata");
+  const [attempt] = runtime.getModelAttempts(run.id);
+  const projection = runtime.getContextProjection(attempt.contextProjectionId);
+  assert.equal(projection.transformations[0].configuration.token, "[redacted]");
+  assert.equal(projection.transformations[0].decisions[0].token, "[redacted]");
+  await runtime.close();
+});
+
+test("runtime persists a failed context transform as a failed model attempt", async () => {
+  const transform = { id: "test.failing-transform", version: "1", configuration: { mode: "repro" },
+    transform({ content }) {
+      return { content: [...content,
+        { type: "tool-result", callId: "missing", output: "invalid", isError: false }], decisions: [] };
+  } };
+  const runtime = createTestRuntime(providerFrom(async () => { throw new Error("provider must not run"); }), [], {
+    contextTransforms: [transform],
+  });
+  const session = await runtime.createSession("transform-failure-session");
+  const run = await runtime.run(session.id, "fail before provider");
+  assert.equal(run.status, "failed");
+  const [attempt] = runtime.getModelAttempts(run.id);
+  assert.equal(attempt.status, "failed");
+  assert.equal(attempt.error.code, "context.transform");
+  assert.equal(attempt.error.transformId, "test.failing-transform");
+  assert.equal(attempt.requestArtifactId, undefined);
+  const projection = runtime.getContextProjection(attempt.contextProjectionId);
+  const contentHash = createHash("sha256").update(JSON.stringify(projection.content)).digest("hex");
+  assert.equal(projection.requestHash, contentHash);
+  assert.equal(projection.content.some((value) => value.type === "tool-result"), false);
+  assert.deepEqual(projection.transformations, [{ id: "test.failing-transform", version: "1", status: "failed",
+    configuration: { mode: "repro" }, inputHash: projection.requestHash, outputHash: projection.requestHash, decisions: [],
+    error: { code: "context.transform-failed" } }]);
+  await runtime.close();
 });

@@ -55,12 +55,19 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
       if (request.type === "glob") {
         const cwd = await this.#resolve(".", request.cwd);
         const path = await this.#resolve(request.path ?? ".", request.cwd);
-        const result = await execFileAsync("rg", ["--files", "--color=never", "--glob", request.pattern,
-          "--", relative(cwd, path) || "."], {
-          cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
-        });
-        const lines = result.stdout.split("\n").filter(Boolean).sort().slice(0, request.maxResults ?? 200);
-        return this.#output(request, lines.join("\n"), { matches: lines.length });
+        try {
+          const result = await execFileAsync("rg", ["--files", "--color=never", "--glob", request.pattern,
+            "--", relative(cwd, path) || "."], {
+            cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
+          });
+          const lines = result.stdout.split("\n").filter(Boolean).sort().slice(0, request.maxResults ?? 200);
+          return this.#output(request, lines.join("\n"), { matches: lines.length });
+        } catch (error) {
+          if ((error as { code?: string | number }).code === 1) {
+            return { ok: true, output: "", metadata: { matches: 0 } };
+          }
+          throw error;
+        }
       }
       if (request.type === "search") {
         const cwd = await this.#resolve(".", request.cwd);
@@ -136,11 +143,6 @@ export class LocalDevelopmentWorker implements ExecutionWorker {
           cwd, env: this.#environment, signal, timeout: remaining, maxBuffer: this.#maxArtifactBytes,
         });
         return this.#output(request, `${result.stdout}${result.stderr}`);
-      }
-      if (request.type === "webFetch") {
-        const output = await fetchText(request.url, request.maxBytes ?? 262_144,
-          AbortSignal.any([signal, AbortSignal.timeout(remaining)]));
-        return this.#output(request, output);
       }
       if (request.type === "shell") {
         const cwd = await this.#resolve(".", request.cwd);
@@ -257,35 +259,6 @@ function countOccurrences(value: string, search: string): number {
   let count = 0;
   for (let index = 0; (index = value.indexOf(search, index)) !== -1; index += search.length) count++;
   return count;
-}
-
-async function fetchText(rawUrl: string, maximumBytes: number, signal: AbortSignal): Promise<string> {
-  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 1 || maximumBytes > 1_048_576) {
-    throw new Error("webFetch maxBytes must be from 1 through 1048576");
-  }
-  const url = new URL(rawUrl);
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.username || url.password) {
-    throw new Error("webFetch requires an HTTP(S) URL without credentials");
-  }
-  const response = await fetch(url, { signal, headers: { accept: "text/*, application/json, application/xml;q=0.9" } });
-  if (!response.ok) throw new Error(`webFetch received HTTP ${response.status}`);
-  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "text/plain";
-  if (!contentType.startsWith("text/") && !contentType.includes("json") && !contentType.includes("xml") &&
-    !contentType.includes("javascript")) {
-    throw new Error(`webFetch does not project content type ${contentType}`);
-  }
-  const reader = response.body?.getReader();
-  if (!reader) return "";
-  const chunks: Uint8Array[] = [];
-  let bytes = 0;
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    bytes += chunk.value.byteLength;
-    if (bytes > maximumBytes) { await reader.cancel(); throw new Error(`webFetch response exceeds ${maximumBytes} bytes`); }
-    chunks.push(chunk.value);
-  }
-  return new TextDecoder().decode(Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))));
 }
 
 function projectOutput(value: string, maximumBytes: number): string {

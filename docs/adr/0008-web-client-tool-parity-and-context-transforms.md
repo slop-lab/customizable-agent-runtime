@@ -29,7 +29,7 @@ without rewriting authoritative session history.
   record projections. Its API boundary remains small so polling can later be
   replaced by the canonical WebSocket JSON-RPC event protocol.
 - Add the common coding-agent tool names `bash`, `glob`, `grep`, and `edit`, plus
-  `git_diff` and a bounded `web_fetch`, while retaining the pre-stable `shell`,
+  `git_diff`, while retaining the pre-stable `shell`,
   `list`, and `search` tools for existing-session compatibility. All workspace
   operations continue through the typed worker protocol and every tool call
   continues through the unified dispatcher.
@@ -39,11 +39,12 @@ without rewriting authoritative session history.
   artifacts.
 - Persist each applied transform's identity, version, configuration, decision
   list, and input/output hashes with the context projection. Capture configured
-  transform identity and configuration in immutable run provenance.
+  transform identity and configuration in immutable run provenance version 2;
+  existing version-1 manifests remain readable without transform metadata.
 - Validate transformed tool structure before provider invocation. A tool result
   must retain a preceding matching tool call, and duplicate call/result IDs are
-  rejected. Transform failure fails the run rather than silently sending an
-  untransformed context.
+  rejected. Transform failure persists a failed projection and model attempt,
+  then fails the run rather than silently sending an untransformed context.
 - Supply one deterministic default transform that prunes old successful tool
   result payloads. At 20 completed tool exchanges it replaces the oldest ten
   outputs with a fixed tombstone while preserving call IDs, tool names, inputs,

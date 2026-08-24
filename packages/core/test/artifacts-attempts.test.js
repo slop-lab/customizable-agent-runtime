@@ -27,7 +27,8 @@ test("attempts retain context, artifacts, profile, usage, and retry decisions", 
   });
   repository.saveContextProjection({ id: "context", runId: "run", projectorId: "test", projectorVersion: "1",
     includedRecordIds: [], excludedRecords: [], content: [{ type: "text", role: "user", text: "hello" }],
-    transformations: [{ id: "test.transform", version: "1", inputHash: "in", outputHash: "out", decisions: [] }],
+    transformations: [{ id: "test.transform", version: "1", status: "applied",
+      inputHash: "in", outputHash: "out", decisions: [] }],
     createdAt: "start" });
   const profile = { id: "profile", provider: "fake", model: "fake", endpoint: "fake://local", credentialHandle: "none" };
   const capabilities = { version: 1, values: { "core.streaming.text": { supported: true } } };
@@ -43,6 +44,7 @@ test("attempts retain context, artifacts, profile, usage, and retry decisions", 
   assert.deepEqual(attempt.usage, { total_tokens: 3 });
   assert.deepEqual(attempt.normalizedUsage, { version: 1, totalTokens: 3 });
   assert.deepEqual(repository.getContextProjection("context").transformations,
-    [{ id: "test.transform", version: "1", inputHash: "in", outputHash: "out", decisions: [] }]);
+    [{ id: "test.transform", version: "1", status: "applied",
+      inputHash: "in", outputHash: "out", decisions: [] }]);
   database.close();
 });

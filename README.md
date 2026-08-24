@@ -68,8 +68,8 @@ runs, immutable run and worker-execution provenance manifests, operations,
 model attempts, normalized context projections, provider request/event
 artifacts, records, command receipts, and an event outbox in SQLite. It
 recovers abandoned work after restart and routes default `read`, `glob`,
-`grep`, `edit`, `write`, `apply_patch`, `bash`, `git_status`, `git_diff`, and
-bounded textual `web_fetch` tools through a typed workspace worker. The older
+`grep`, `edit`, `write`, `apply_patch`, `bash`, `git_status`, and `git_diff`
+tools through a typed workspace worker. The older
 `list`, `search`, and `shell` names remain available for pre-stable durable
 session compatibility. Large successful tool output
 is retained as an operation-owned artifact while only a bounded head/tail
@@ -221,8 +221,10 @@ on every call. Tool call IDs, names, inputs, result pairing, errors, and durable
 artifact references are preserved.
 
 Every context projection records transform identity/version/configuration,
-input/output hashes, and per-result decisions. The immutable run provenance
-records the configured transform set. The web inspector exposes this data.
+status, input/output hashes, and per-result decisions. A transform failure is
+persisted as a failed projection and model attempt before the run fails. The
+immutable run provenance records the configured transform set. The web
+inspector exposes this data.
 Configure or disable the default policy before starting the daemon:
 
 ```bash

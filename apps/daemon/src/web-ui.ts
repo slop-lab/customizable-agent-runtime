@@ -63,7 +63,8 @@ export const webUiHtml = `<!doctype html>
     <pre id="inspector">Select a run.</pre>
   </aside>
   <script>
-    const state = { sessionId: undefined, activeRunId: undefined, selectedRunId: undefined, polling: false };
+    const state = { sessionId: undefined, activeRunId: undefined, selectedRunId: undefined,
+      polling: false, starting: false };
     const elements = Object.fromEntries(["sessions", "runs", "records", "status", "cancelRun", "promptForm",
       "prompt", "send", "newSession", "runtime", "inspector"].map((id) => [id, document.getElementById(id)]));
 
@@ -108,6 +109,7 @@ export const webUiHtml = `<!doctype html>
     }
 
     async function selectSession(sessionId, reloadSessions = true) {
+      if ((state.activeRunId || state.starting) && sessionId !== state.sessionId) return;
       state.sessionId = sessionId;
       state.activeRunId = undefined;
       state.selectedRunId = undefined;
@@ -153,9 +155,14 @@ export const webUiHtml = `<!doctype html>
       )));
       const running = runs.find((run) => run.status === "running");
       if (running) state.activeRunId = running.id;
-      elements.cancelRun.disabled = !state.activeRunId;
+      syncRunControls();
       elements.status.textContent = state.activeRunId ? "Run in progress" : "Ready";
-      elements.send.disabled = Boolean(state.activeRunId);
+    }
+
+    function syncRunControls() {
+      elements.cancelRun.disabled = !state.activeRunId;
+      elements.send.disabled = Boolean(state.activeRunId) || state.starting;
+      elements.newSession.disabled = Boolean(state.activeRunId) || state.starting;
     }
 
     async function inspectRun(runId) {
@@ -205,13 +212,18 @@ export const webUiHtml = `<!doctype html>
     elements.promptForm.addEventListener("submit", async (event) => {
       event.preventDefault();
       const input = elements.prompt.value.trim();
-      if (!input || state.activeRunId) return;
-      try { await startRun(input); } catch (error) { elements.status.textContent = error.message; }
+      if (!input || state.activeRunId || state.starting) return;
+      state.starting = true;
+      syncRunControls();
+      try { await startRun(input); }
+      catch (error) { elements.status.textContent = error.message; }
+      finally { state.starting = false; syncRunControls(); }
     });
     elements.prompt.addEventListener("keydown", (event) => {
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) elements.promptForm.requestSubmit();
     });
     elements.newSession.addEventListener("click", async () => {
+      if (state.activeRunId || state.starting) return;
       try {
         const session = await api("/v1/sessions", { method: "POST", body: "{}" });
         await loadSessions(session.id);

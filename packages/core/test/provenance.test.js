@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canonicalJson, createRunProvenance, defaultTraceRedactor, hashCanonicalJson } from "../dist/index.js";
+import { canonicalJson, createRunProvenance, defaultTraceRedactor, hashCanonicalJson, KernelDatabase,
+  RuntimeRepository } from "../dist/index.js";
 
 test("canonical provenance hashing is independent of object key order", () => {
   assert.equal(canonicalJson({ z: 1, nested: { b: 2, a: 1 } }),
@@ -38,7 +39,7 @@ test("run provenance is redacted, versioned, and hashes canonical tool schemas",
     redact: (value) => defaultTraceRedactor.redact(value),
   });
 
-  assert.equal(stored.manifest.version, 1);
+  assert.equal(stored.manifest.version, 2);
   assert.equal(stored.manifest.runtime.sourceRevision, "abc123");
   assert.deepEqual(stored.manifest.tools.map((tool) => tool.id), ["a-tool", "z-tool"]);
   assert.equal(stored.manifest.tools[0].inputSchemaHash, stored.manifest.tools[1].inputSchemaHash);
@@ -47,4 +48,19 @@ test("run provenance is redacted, versioned, and hashes canonical tool schemas",
   assert.deepEqual(stored.manifest.contextTransforms,
     [{ id: "context.prune", version: "1", configuration: { retain: 10 } }]);
   assert.equal(stored.manifestHash, hashCanonicalJson(stored.manifest));
+});
+
+test("version-one provenance remains readable without transform metadata", () => {
+  const database = new KernelDatabase(":memory:");
+  const repository = new RuntimeRepository(database);
+  database.transaction(() => {
+    database.db.prepare("INSERT INTO sessions(id, created_at) VALUES ('session', 'now')").run();
+    database.db.prepare("INSERT INTO runs(id, session_id, status, started_at) VALUES ('run', 'session', 'completed', 'now')").run();
+    database.db.prepare(`INSERT INTO run_provenance(run_id, version, manifest_json, manifest_sha256, created_at)
+      VALUES ('run', 1, ?, 'legacy-hash', 'now')`).run(JSON.stringify({ version: 1, runId: "run" }));
+  });
+  const stored = repository.getRunProvenance("run");
+  assert.equal(stored.manifest.version, 1);
+  assert.equal(stored.manifest.contextTransforms, undefined);
+  database.close();
 });

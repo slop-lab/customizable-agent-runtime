@@ -380,20 +380,7 @@ export function createWorkerTools(worker: ExecutionWorker): readonly Tool[] {
         ...(value.staged === undefined ? {} : { staged: value.staged }) }, context.signal));
     },
   };
-  const webFetch: Tool = {
-    description: { name: "web_fetch", version: "1", description: "Fetch bounded textual content from an HTTP(S) URL.",
-      inputSchema: { type: "object", properties: { url: { type: "string" },
-        maxBytes: { type: "integer", minimum: 1, maximum: 1_048_576 } }, required: ["url"] },
-      validateInput: (input) => isWebFetchInput(input) ? undefined :
-        "Expected an HTTP(S) URL without credentials and optional maxBytes up to 1048576." },
-    async execute(input, context) {
-      const value = input as { url: string; maxBytes?: number };
-      return toolResult(await worker.execute({ type: "webFetch", operationId: context.operationId,
-        workspace: context.workspace, deadline: context.deadline, url: value.url,
-        ...(value.maxBytes === undefined ? {} : { maxBytes: value.maxBytes }) }, context.signal));
-    },
-  };
-  return [read, glob, grep, edit, write, applyPatch, bash, gitStatus, gitDiff, webFetch,
+  return [read, glob, grep, edit, write, applyPatch, bash, gitStatus, gitDiff,
     list, search, shell];
 }
 
@@ -457,13 +444,6 @@ function isEmptyObject(input: unknown): input is Record<string, never> {
 function isGitDiffInput(input: unknown): input is { path?: string; cwd?: string; staged?: boolean } {
   return isObject(input) && optionalString(input, "path") && optionalString(input, "cwd") &&
     (input.staged === undefined || typeof input.staged === "boolean");
-}
-function isWebFetchInput(input: unknown): input is { url: string; maxBytes?: number } {
-  if (!isObject(input) || typeof input.url !== "string" || !optionalInteger(input, "maxBytes", 1, 1_048_576)) return false;
-  try {
-    const url = new URL(input.url);
-    return (url.protocol === "http:" || url.protocol === "https:") && !url.username && !url.password;
-  } catch { return false; }
 }
 function isObject(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);

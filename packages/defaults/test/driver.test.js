@@ -25,7 +25,7 @@ test("context pruning is configurable from the host environment", () => {
 test("default runtime exposes the complete development workspace tool set", async () => {
   const runtime = createDefaultRuntime({ worker: new FakeWorker(() => ({ ok: true, output: "unused" })) });
   assert.deepEqual(runtime.capabilities().tools.map((tool) => tool.name),
-    ["read", "glob", "grep", "edit", "write", "apply_patch", "bash", "git_status", "git_diff", "web_fetch",
+    ["read", "glob", "grep", "edit", "write", "apply_patch", "bash", "git_status", "git_diff",
       "list", "search", "shell"]);
   assert.deepEqual(runtime.capabilities().contextTransforms.map((transform) => transform.id),
     ["core.context.old-tool-results"]);
@@ -169,11 +169,13 @@ test("demo driver cancellation during retry backoff starts no additional attempt
 });
 
 test("demo driver stops repeated identical tool calls", async () => {
-  const call = { type: "tool-call", callId: "call", toolName: "read", input: { path: "README.md" } };
+  let callNumber = 0;
   const provider = { id: "repeat", profile: { id: "repeat", provider: "fake", model: "repeat",
     endpoint: "fake://repeat", credentialHandle: "none" },
     capabilities: { version: 1, values: { "core.tools.calls": { supported: true } } },
-    async invoke(request) { request.recordRequest({}); request.recordEvent("done", {}); return { content: [call] }; } };
+    async invoke(request) { request.recordRequest({}); request.recordEvent("done", {}); return { content: [
+      { type: "tool-call", callId: `call-${++callNumber}`, toolName: "read", input: { path: "README.md" } },
+    ] }; } };
   const runtime = createDefaultRuntime({ provider, worker: new FakeWorker(() => ({ ok: true, output: "same" })) });
   const session = await runtime.createSession("session");
   const run = await runtime.run(session.id, "loop");

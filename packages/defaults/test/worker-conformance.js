@@ -13,6 +13,8 @@ export function workerConformance(name, create) {
       assert.equal(listed.ok, true); assert.match(listed.output, /hello\.txt/);
       const globbed = await worker.execute({ ...base, type: "glob", pattern: "*.txt", path: "." }, signal);
       assert.equal(globbed.ok, true); assert.match(globbed.output, /hello\.txt/);
+      const noGlob = await worker.execute({ ...base, type: "glob", pattern: "*.missing", path: "." }, signal);
+      assert.equal(noGlob.ok, true); assert.equal(noGlob.output, "");
       const searched = await worker.execute({ ...base, type: "search", query: "hello", path: ".",
         include: "*.txt", maxResults: 10 }, signal);
       assert.equal(searched.ok, true); assert.match(searched.output, /hello\.txt.*hello worker/);

@@ -59,7 +59,7 @@ async function handleMessage(message: IsolatedWorkerHostMessage): Promise<void> 
       resourceLimits: { maximumInlineOutputBytes: configuration.maximumInlineOutputBytes,
         maximumArtifactBytes: configuration.maximumArtifactBytes },
       requestTypes: ["readFile", "list", "glob", "search", "editFile", "writeFile", "applyPatch", "shell",
-        "gitStatus", "gitDiff", "webFetch"],
+        "gitStatus", "gitDiff"],
     });
     send({ type: "ready", lease, executionManifest });
     return;
