@@ -45,14 +45,25 @@ to use the functional web client. It creates and selects durable sessions,
 starts and cancels runs, polls the transcript, expands tool calls/results, and
 inspects attempts, operations, provenance, and the latest context projection.
 It deliberately uses plain HTML/CSS/JavaScript and has no UI framework or
-polished interaction contract.
+polished interaction contract. The same page includes a functional adaptive
+review-workflow panel for creating a repository/head plan, completing ordered
+gates, recording risk evidence, changing the head, and inspecting merge
+blockers and revision counts.
+
+Every request must use an allowed `Host`, browser requests must use an allowed
+`Origin`, and every `POST` must send `Content-Type: application/json`. Loopback
+origins are allowed by default. A non-loopback `CAR_HOST` requires a
+comma-separated exact-origin allowlist such as
+`CAR_ALLOWED_ORIGINS=https://car.example.internal`; configure the reverse proxy
+to preserve that host. Request bodies are capped at 128 KiB. This boundary is
+defense in depth for the local API, not a substitute for authentication or TLS.
 
 The same operations remain available through the initial HTTP API:
 
 ```bash
 curl http://127.0.0.1:4317/v1/capabilities
 curl http://127.0.0.1:4317/v1/plugins
-curl -X POST http://127.0.0.1:4317/v1/sessions
+curl -X POST -H 'content-type: application/json' -d '{}' http://127.0.0.1:4317/v1/sessions
 curl http://127.0.0.1:4317/v1/sessions
 curl -X POST -H 'content-type: application/json' \
   -d '{"input":"Summarize this repository"}' \
@@ -63,10 +74,74 @@ curl http://127.0.0.1:4317/v1/runs/RUN_ID/provenance
 curl http://127.0.0.1:4317/v1/runs/RUN_ID/worker-execution-manifests
 ```
 
+### Adaptive pull-request review flow
+
+CAR can durably evaluate whether a project-specific review plan is locally
+satisfied. The built-in adaptive flow requires protected-base
+evidence, implementation, an opened pull request, automated checks, agent code
+review, and a distinct human approval. Evidence is pinned to the current head.
+Submitting `risk.detected` evidence can append a required review stage and
+reopen its transitive downstream gates. Every accepted mutation advances an
+append-only revision, and stale `expectedRevision` writes fail with HTTP 409.
+Evidence and head changes also carry caller-scoped `externalEventId` values so
+exact retries return the already committed result rather than duplicating it.
+
+Create a workflow (the browser provides the same controls):
+
+```bash
+curl -X POST -H 'content-type: application/json' \
+  -d '{"projectId":"car","repository":"dim/car","baseBranch":"main","headSha":"0123456789abcdef0123456789abcdef01234567"}' \
+  http://127.0.0.1:4317/v1/review-workflows
+
+curl http://127.0.0.1:4317/v1/review-workflows
+curl http://127.0.0.1:4317/v1/review-workflows/WORKFLOW_ID
+curl 'http://127.0.0.1:4317/v1/review-workflows/WORKFLOW_ID/history?limit=50'
+```
+
+Mutations use the returned `workflow.currentRevision`. Stage completion is
+`POST /v1/review-workflows/{id}/stages/{stageId}/complete` with
+`{"expectedRevision":N,"evidence":{"externalEventId":"...",...}}`. Additional normalized evidence uses
+`POST /v1/review-workflows/{id}/evidence`; a head change uses
+`POST /v1/review-workflows/{id}/head`. Current/list/mutation responses are
+bounded projections with `historyCounts`; immutable audit data is read in
+descending revision pages from `/history?limit=1..100&beforeRevision=N`.
+
+The current HTTP API and browser are a local policy simulation: callers assert
+Git-host, CI, agent, and human source labels themselves. Accordingly,
+`mergeReadiness.ready` means the local graph is satisfied, while
+`mergeReadiness.publishable` remains `false` until a future authenticated
+adapter supplies attested evidence. A Git-host required check must consume only
+the latter. The UI labels manual actions as assertions rather than approvals
+from an authenticated authority.
+
+The core contract is provider-neutral. `core.review.declarative` consumes typed
+JSON-compatible stage configuration, so a future YAML adapter can compile into
+it without making YAML authoritative. `core.review.adaptive` demonstrates
+runtime revision in response to evidence. Fully trusted in-process plugins may
+register additional namespaced providers during setup. `revise` receives an
+explicit bounded chronological window as
+`recentEvidence` (at most 100 current-head items, returned oldest-to-newest)
+plus `evidenceWindow.{limit,total,truncated}` and `latestEvidence`. Providers
+must carry durable derived policy forward in the plan rather than assuming the
+entire evidence history is resident in memory. The registrar remains
+pre-stable and provides no code isolation. Providers are pinned by `id@version`,
+and multiple versions can coexist for existing durable workflows. Stage
+definitions own their evidence type, accepted source kinds, and required
+payload fields, all of which participate in the transitive gate hash. DIM and
+Symphony adapters, Gitea PR
+creation/status publication, branch-protection management, and authenticated
+human identity are intentionally not part of this slice. Until a Git-host
+adapter publishes readiness as a required check, the result does not by itself
+prevent a remote merge.
+
+Run the complete local lifecycle, including daemon restart and head
+invalidation, with `just test-review-workflow`.
+
 The current implementation is a durable kernel spike. It persists sessions,
 runs, immutable run and worker-execution provenance manifests, operations,
 model attempts, normalized context projections, provider request/event
-artifacts, records, command receipts, and an event outbox in SQLite. It
+artifacts, adaptive review plans/revisions/evidence/results, records, command
+receipts, and an event outbox in SQLite. It
 recovers abandoned work after restart and routes default `read`, `glob`,
 `grep`, `edit`, `write`, `apply_patch`, `bash`, `git_status`, and `git_diff`
 tools through a typed workspace worker. The older

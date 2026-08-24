@@ -10,7 +10,14 @@ import {
   createRuntimeProvenanceFromEnvironment,
   EnvironmentCredentialResolver,
 } from "@car/defaults";
-import { PluginHost, RuntimeError, type RuntimePlugin } from "@car/core";
+import {
+  PluginHost,
+  RuntimeError,
+  type CompleteReviewStageInput,
+  type CreateReviewWorkflowInput,
+  type ReviewEvidenceInput,
+  type RuntimePlugin,
+} from "@car/core";
 import { createGiteaPlugin, GiteaFetchTransport } from "@car/plugin-gitea";
 import { createStreamableHttpMcpPlugin } from "@car/plugin-mcp";
 import { webUiHtml } from "./web-ui.js";
@@ -36,6 +43,8 @@ try {
 }
 const host = process.env.CAR_HOST ?? "127.0.0.1";
 const port = Number.parseInt(process.env.CAR_PORT ?? "4317", 10);
+const allowedOrigins = readAllowedOrigins(host, port, process.env.CAR_ALLOWED_ORIGINS);
+const allowedHosts = new Set([...allowedOrigins].map((origin) => new URL(origin).host.toLowerCase()));
 
 function readWorkerBackend(value: string | undefined): "local" | "isolated-process" {
   if (value === undefined || value === "local") return "local";
@@ -119,7 +128,9 @@ const server = createServer(async (request, response) => {
 });
 
 async function route(request: IncomingMessage, response: ServerResponse) {
-  const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+  assertAllowedRequest(request, allowedOrigins, allowedHosts);
+  if (request.method === "POST") requireJsonContentType(request);
+  const url = new URL(request.url ?? "/", `http://${request.headers.host!}`);
 
   if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/index.html")) {
     sendHtml(response, webUiHtml);
@@ -143,7 +154,76 @@ async function route(request: IncomingMessage, response: ServerResponse) {
     send(response, 200, runtime.usage({ ...(sessionId ? { sessionId } : {}), ...(runId ? { runId } : {}) }));
     return;
   }
+  if (request.method === "POST" && url.pathname === "/v1/review-workflows") {
+    const body = await readJson(request);
+    if (!isObject(body)) throw new RuntimeError("validation", "Review workflow body must be a JSON object");
+    send(response, 201, await runtime.createReviewWorkflow(body as unknown as CreateReviewWorkflowInput));
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/v1/review-workflows") {
+    const limit = readLimit(url);
+    if (limit === undefined) { send(response, 400, { error: "limit must be an integer from 1 through 100" }); return; }
+    send(response, 200, runtime.listReviewWorkflows({ limit }));
+    return;
+  }
+
+  const reviewHistoryMatch = /^\/v1\/review-workflows\/([^/]+)\/history$/.exec(url.pathname);
+  if (request.method === "GET" && reviewHistoryMatch?.[1]) {
+    const limit = readLimit(url);
+    if (limit === undefined) { send(response, 400, { error: "limit must be an integer from 1 through 100" }); return; }
+    send(response, 200, runtime.getReviewWorkflowHistory(pathParameter(reviewHistoryMatch[1], "workflow id"), {
+      limit, ...readBeforeRevision(url),
+    }));
+    return;
+  }
+
+  const reviewWorkflowMatch = /^\/v1\/review-workflows\/([^/]+)$/.exec(url.pathname);
+  if (request.method === "GET" && reviewWorkflowMatch?.[1]) {
+    const workflow = runtime.getReviewWorkflow(pathParameter(reviewWorkflowMatch[1], "workflow id"));
+    send(response, workflow ? 200 : 404, workflow ?? { error: "Review workflow not found" });
+    return;
+  }
+
+  const reviewEvidenceMatch = /^\/v1\/review-workflows\/([^/]+)\/evidence$/.exec(url.pathname);
+  if (request.method === "POST" && reviewEvidenceMatch?.[1]) {
+    const body = await readJson(request);
+    if (!isObject(body) || !isObject(body.evidence)) {
+      throw new RuntimeError("validation", "Expected expectedRevision and evidence object");
+    }
+    send(response, 200, await runtime.appendReviewEvidence(pathParameter(reviewEvidenceMatch[1], "workflow id"),
+      readExpectedRevision(body.expectedRevision), body.evidence as unknown as ReviewEvidenceInput));
+    return;
+  }
+
+  const reviewStageMatch = /^\/v1\/review-workflows\/([^/]+)\/stages\/([^/]+)\/complete$/.exec(url.pathname);
+  if (request.method === "POST" && reviewStageMatch?.[1] && reviewStageMatch[2]) {
+    const body = await readJson(request);
+    if (!isObject(body) || !isObject(body.evidence)) {
+      throw new RuntimeError("validation", "Expected expectedRevision and evidence object");
+    }
+    const input: CompleteReviewStageInput = { expectedRevision: readExpectedRevision(body.expectedRevision),
+      stageId: pathParameter(reviewStageMatch[2], "stage id"), evidence: body.evidence as unknown as ReviewEvidenceInput };
+    send(response, 200, await runtime.completeReviewStage(pathParameter(reviewStageMatch[1], "workflow id"), input));
+    return;
+  }
+
+  const reviewHeadMatch = /^\/v1\/review-workflows\/([^/]+)\/head$/.exec(url.pathname);
+  if (request.method === "POST" && reviewHeadMatch?.[1]) {
+    const body = await readJson(request);
+    if (!isObject(body) || typeof body.headSha !== "string" || typeof body.externalEventId !== "string" ||
+      !isObject(body.source)) {
+      throw new RuntimeError("validation", "Expected expectedRevision, headSha, externalEventId, and source");
+    }
+    send(response, 200, await runtime.updateReviewWorkflowHead(pathParameter(reviewHeadMatch[1], "workflow id"), {
+      expectedRevision: readExpectedRevision(body.expectedRevision), headSha: body.headSha,
+      externalEventId: body.externalEventId,
+      source: body.source as unknown as ReviewEvidenceInput["source"],
+    }));
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/v1/sessions") {
+    await readJsonObject(request, "Session creation body");
     send(response, 201, await runtime.createSession());
     return;
   }
@@ -184,6 +264,7 @@ async function route(request: IncomingMessage, response: ServerResponse) {
 
   const cancelMatch = /^\/v1\/runs\/([^/]+)\/cancel$/.exec(url.pathname);
   if (request.method === "POST" && cancelMatch?.[1]) {
+    await readJsonObject(request, "Run cancellation body");
     send(response, runtime.cancelRun(cancelMatch[1]) ? 202 : 404, {});
     return;
   }
@@ -263,14 +344,100 @@ function optionalParameter(url: URL, name: string): string | undefined {
 
 async function readJson(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
-  for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  let byteLength = 0;
+  let tooLarge = false;
+  for await (const chunk of request) {
+    const buffer = Buffer.from(chunk);
+    byteLength += buffer.byteLength;
+    if (byteLength <= 128 * 1024) chunks.push(buffer);
+    else tooLarge = true;
+  }
+  if (tooLarge) throw new RuntimeError("validation", "Request body must not exceed 128 KiB");
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown; }
   catch { throw new RuntimeError("validation", "Request body must be valid JSON"); }
+}
+
+async function readJsonObject(request: IncomingMessage, label: string): Promise<Record<string, unknown>> {
+  const value = await readJson(request);
+  if (!isObject(value)) throw new RuntimeError("validation", `${label} must be a JSON object`);
+  return value;
+}
+
+function readAllowedOrigins(host: string, port: number, configured: string | undefined): ReadonlySet<string> {
+  const values = new Set<string>();
+  if (isLoopbackHost(host)) {
+    values.add(`http://127.0.0.1:${port}`);
+    values.add(`http://localhost:${port}`);
+    values.add(`http://[::1]:${port}`);
+  }
+  for (const candidate of (configured ?? "").split(",").map((value) => value.trim()).filter(Boolean)) {
+    let parsed: URL;
+    try { parsed = new URL(candidate); }
+    catch { throw new RuntimeError("validation", `Invalid CAR_ALLOWED_ORIGINS origin: ${candidate}`); }
+    if ((parsed.protocol !== "http:" && parsed.protocol !== "https:") || parsed.origin !== candidate ||
+      parsed.username || parsed.password || parsed.pathname !== "/" || parsed.search || parsed.hash) {
+      throw new RuntimeError("validation", `CAR_ALLOWED_ORIGINS must contain exact HTTP origins: ${candidate}`);
+    }
+    values.add(parsed.origin);
+  }
+  if (values.size === 0) {
+    throw new RuntimeError("validation", "CAR_ALLOWED_ORIGINS is required when CAR_HOST is not loopback");
+  }
+  return values;
+}
+
+function isLoopbackHost(value: string): boolean {
+  return value === "127.0.0.1" || value === "localhost" || value === "::1";
+}
+
+function assertAllowedRequest(request: IncomingMessage, origins: ReadonlySet<string>, hosts: ReadonlySet<string>): void {
+  const requestHost = request.headers.host?.toLowerCase();
+  if (!requestHost || !hosts.has(requestHost)) {
+    throw new RuntimeError("validation", "Request Host is not allowed");
+  }
+  const origin = request.headers.origin;
+  if (origin !== undefined && !origins.has(origin)) {
+    throw new RuntimeError("validation", "Request Origin is not allowed");
+  }
+}
+
+function requireJsonContentType(request: IncomingMessage): void {
+  const mediaType = request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase();
+  if (mediaType !== "application/json") {
+    throw new RuntimeError("validation", "POST requests require Content-Type: application/json");
+  }
+}
+
+function pathParameter(value: string, label: string): string {
+  try { return decodeURIComponent(value); }
+  catch { throw new RuntimeError("validation", `Malformed percent-encoding in ${label}`); }
+}
+
+function readBeforeRevision(url: URL): { readonly beforeRevision?: number } {
+  const value = url.searchParams.get("beforeRevision");
+  if (value === null) return {};
+  if (!/^\d+$/.test(value)) throw new RuntimeError("validation", "beforeRevision must be a positive integer");
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new RuntimeError("validation", "beforeRevision must be a positive integer");
+  }
+  return { beforeRevision: parsed };
 }
 
 function isRunBody(value: unknown): value is { input: string } {
   return typeof value === "object" && value !== null && "input" in value &&
     typeof (value as { input?: unknown }).input === "string";
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readExpectedRevision(value: unknown): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 1) {
+    throw new RuntimeError("validation", "expectedRevision must be a positive integer");
+  }
+  return Number(value);
 }
 
 function send(response: ServerResponse, status: number, body: unknown) {

@@ -12,10 +12,11 @@ export const webUiHtml = `<!doctype html>
     aside { border-inline-end: 1px solid #7776; overflow: auto; }
     aside:last-child { border-inline: 1px solid #7776; border-inline-end: 0; }
     header { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
-    button, textarea { font: inherit; }
+    button, input, textarea { font: inherit; }
     button { cursor: pointer; padding: .4rem .7rem; }
     button:disabled { cursor: not-allowed; opacity: .55; }
     textarea { width: 100%; min-height: 7rem; resize: vertical; padding: .65rem; }
+    input { width: 100%; min-width: 0; padding: .4rem; }
     form { display: grid; gap: .5rem; }
     .row { display: flex; gap: .5rem; align-items: center; }
     .list { display: grid; gap: .4rem; }
@@ -29,6 +30,9 @@ export const webUiHtml = `<!doctype html>
     summary { cursor: pointer; font-weight: 600; }
     pre { margin: .5rem 0 0; padding: .6rem; overflow: auto; background: #7772; white-space: pre-wrap; overflow-wrap: anywhere; }
     .muted { opacity: .7; font-size: .9rem; }
+    .workflow-stage { border: 1px solid #7776; border-radius: .4rem; padding: .5rem; display: grid; gap: .35rem; }
+    .ready { color: #42a66c; font-weight: 700; }
+    .blocked { color: #d88b58; font-weight: 700; }
     #status { margin-inline-start: auto; }
     h1, h2 { margin-top: 0; }
     @media (max-width: 960px) {
@@ -57,6 +61,27 @@ export const webUiHtml = `<!doctype html>
     </form>
   </main>
   <aside>
+    <h2>Review workflows</h2>
+    <form id="workflowForm">
+      <input id="workflowProject" required value="local" aria-label="Project id" placeholder="Project id">
+      <input id="workflowRepository" required value="local/workspace" aria-label="Repository" placeholder="owner/repository">
+      <input id="workflowBase" required value="main" aria-label="Base branch" placeholder="Base branch">
+      <input id="workflowHead" required pattern="([a-fA-F0-9]{40}|[a-fA-F0-9]{64})" aria-label="Head SHA" placeholder="Full current commit SHA">
+      <button type="submit">Create workflow</button>
+    </form>
+    <div id="workflows" class="list" style="margin-top:.75rem"></div>
+    <div id="workflowDetails" style="margin-top:1rem"><span class="muted">Create or select a workflow.</span></div>
+    <form id="riskForm" style="margin-top:.75rem">
+      <input id="riskCategory" value="security" aria-label="Risk category" placeholder="Risk category">
+      <button type="submit">Record risk</button>
+    </form>
+    <form id="headForm" style="margin-top:.75rem">
+      <input id="nextHead" pattern="([a-fA-F0-9]{40}|[a-fA-F0-9]{64})" aria-label="New head SHA" placeholder="Full new head SHA">
+      <button type="submit">Update head</button>
+    </form>
+    <label class="muted" style="display:block;margin-top:.75rem">Local actor
+      <input id="reviewActor" value="local-user" aria-label="Review actor">
+    </label>
     <h2>Runtime</h2>
     <pre id="runtime">Loading…</pre>
     <h2 style="margin-top:1.5rem">Inspector</h2>
@@ -64,9 +89,12 @@ export const webUiHtml = `<!doctype html>
   </aside>
   <script>
     const state = { sessionId: undefined, activeRunId: undefined, selectedRunId: undefined,
-      polling: false, starting: false };
+      workflowId: undefined, workflow: undefined, polling: false, starting: false, sessionBusy: false,
+      workflowBusy: false };
     const elements = Object.fromEntries(["sessions", "runs", "records", "status", "cancelRun", "promptForm",
-      "prompt", "send", "newSession", "runtime", "inspector"].map((id) => [id, document.getElementById(id)]));
+      "prompt", "send", "newSession", "runtime", "inspector", "workflowForm", "workflowProject",
+      "workflowRepository", "workflowBase", "workflowHead", "workflows", "workflowDetails", "riskForm",
+      "riskCategory", "headForm", "nextHead", "reviewActor"].map((id) => [id, document.getElementById(id)]));
 
     async function api(path, options) {
       const response = await fetch(path, { ...options, headers: { "content-type": "application/json", ...(options && options.headers) } });
@@ -89,7 +117,108 @@ export const webUiHtml = `<!doctype html>
     async function loadRuntime() {
       const [capabilities, plugins] = await Promise.all([api("/v1/capabilities"), api("/v1/plugins")]);
       elements.runtime.textContent = json({ provider: capabilities.provider.profile,
-        driver: capabilities.driver, tools: capabilities.tools.map((tool) => tool.name), plugins });
+        driver: capabilities.driver, tools: capabilities.tools.map((tool) => tool.name),
+        reviewWorkflowProviders: capabilities.reviewWorkflowProviders, plugins });
+    }
+
+    async function loadWorkflows(preferredId) {
+      const workflows = await api("/v1/review-workflows?limit=100");
+      const nextId = preferredId || state.workflowId || (workflows[0] && workflows[0].workflow.id);
+      const workflowButtons = workflows.map((snapshot) => button(
+        (snapshot.mergeReadiness.publishable ? "publishable" : snapshot.mergeReadiness.ready
+          ? "simulation-ready" : "blocked") + " · " + snapshot.workflow.repository,
+        () => state.workflowBusy || selectWorkflow(snapshot.workflow.id), snapshot.workflow.id === nextId,
+      ));
+      for (const workflowButton of workflowButtons) workflowButton.disabled = state.workflowBusy;
+      elements.workflows.replaceChildren(...workflowButtons);
+      if (nextId) await selectWorkflow(nextId, false);
+      else renderWorkflow(undefined);
+    }
+
+    async function selectWorkflow(id, reload = true) {
+      state.workflowId = id;
+      state.workflow = await api("/v1/review-workflows/" + encodeURIComponent(id));
+      if (reload) await loadWorkflows(id);
+      else renderWorkflow(state.workflow);
+    }
+
+    function renderWorkflow(snapshot) {
+      elements.workflowDetails.replaceChildren();
+      if (!snapshot) {
+        const empty = document.createElement("span"); empty.className = "muted";
+        empty.textContent = "Create or select a workflow."; elements.workflowDetails.append(empty); return;
+      }
+      const status = document.createElement("p");
+      status.className = snapshot.mergeReadiness.ready ? "ready" : "blocked";
+      status.textContent = snapshot.mergeReadiness.publishable ? "Attested merge status publishable"
+        : snapshot.mergeReadiness.ready ? "CAR policy simulation satisfied" : "CAR policy simulation blocked";
+      const metadata = document.createElement("p"); metadata.className = "muted";
+      metadata.textContent = "revision " + snapshot.workflow.currentRevision + " · " + snapshot.workflow.headSha.slice(0, 12);
+      const stages = document.createElement("div"); stages.className = "list";
+      for (const value of snapshot.stages) {
+        const item = document.createElement("div"); item.className = "workflow-stage";
+        const label = document.createElement("strong");
+        label.textContent = value.stage.label + " · " + value.state;
+        const dependencies = document.createElement("span"); dependencies.className = "muted";
+        dependencies.textContent = value.incompleteDependencies.length
+          ? "Waiting for: " + value.incompleteDependencies.join(", ") : value.stage.kind;
+        const requiresPayload = (value.stage.evidence.requiredPayloadFields || []).length > 0;
+        const complete = button(requiresPayload
+          ? "Use API (requires: " + value.stage.evidence.requiredPayloadFields.join(", ") + ")"
+          : "Assert complete", () => completeWorkflowStage(value.stage));
+        complete.disabled = state.workflowBusy || value.state !== "pending" || requiresPayload;
+        item.append(label, dependencies, complete); stages.append(item);
+      }
+      const blockers = document.createElement("pre");
+      blockers.textContent = json({ blockers: snapshot.mergeReadiness.blockers,
+        attestationBlockers: snapshot.mergeReadiness.attestationBlockers,
+        provider: snapshot.workflow.provider, latestCause: snapshot.current.cause,
+        evidenceCount: snapshot.historyCounts.evidence, revisionCount: snapshot.historyCounts.revisions });
+      elements.workflowDetails.append(status, metadata, stages, blockers);
+    }
+
+    function stageEvidence(stage) {
+      const authoritativeKinds = { "protected-base": "git-host", "pull-request": "git-host",
+        "human-approval": "human" };
+      const authoritativeKind = authoritativeKinds[stage.kind];
+      const kind = authoritativeKind && stage.evidence.acceptedSourceKinds.includes(authoritativeKind)
+        ? authoritativeKind : stage.evidence.acceptedSourceKinds[0];
+      const sourceIds = { agent: "local-agent-assertion", tool: "local-tool-assertion",
+        ci: "local-ci-assertion", human: elements.reviewActor.value.trim() || "local-user",
+        "git-host": "local-git-assertion", system: "local-system-assertion" };
+      return { externalEventId: eventId(), type: stage.evidence.type,
+        commitSha: state.workflow.workflow.headSha,
+        source: { kind, id: sourceIds[kind] }, payload: { stageId: stage.id } };
+    }
+
+    function eventId() {
+      return typeof crypto.randomUUID === "function" ? crypto.randomUUID()
+        : Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    }
+
+    async function completeWorkflowStage(stage) {
+      if (state.workflowBusy) return;
+      await withWorkflowBusy(async () => { try {
+        state.workflow = await api("/v1/review-workflows/" + encodeURIComponent(state.workflowId) +
+          "/stages/" + encodeURIComponent(stage.id) + "/complete", { method: "POST", body: JSON.stringify({
+            expectedRevision: state.workflow.workflow.currentRevision, evidence: stageEvidence(stage),
+          }) });
+        await loadWorkflows(state.workflowId);
+      } catch (error) { elements.status.textContent = error.message; } });
+    }
+
+    function syncWorkflowBusy() {
+      for (const form of [elements.workflowForm, elements.riskForm, elements.headForm]) {
+        for (const control of form.elements) control.disabled = state.workflowBusy;
+      }
+      if (state.workflow) renderWorkflow(state.workflow);
+    }
+
+    async function withWorkflowBusy(action) {
+      if (state.workflowBusy) return;
+      state.workflowBusy = true; syncWorkflowBusy();
+      try { return await action(); }
+      finally { state.workflowBusy = false; syncWorkflowBusy(); }
     }
 
     async function loadSessions(preferredId) {
@@ -102,7 +231,7 @@ export const webUiHtml = `<!doctype html>
       const nextId = preferredId || state.sessionId || sessions[0].id;
       elements.sessions.replaceChildren(...sessions.map((session) => button(
         session.firstUserMessage || session.id,
-        () => selectSession(session.id),
+        () => state.sessionBusy || selectSession(session.id),
         session.id === nextId,
       )));
       if (state.sessionId !== nextId) await selectSession(nextId, false);
@@ -162,7 +291,7 @@ export const webUiHtml = `<!doctype html>
     function syncRunControls() {
       elements.cancelRun.disabled = !state.activeRunId;
       elements.send.disabled = Boolean(state.activeRunId) || state.starting;
-      elements.newSession.disabled = Boolean(state.activeRunId) || state.starting;
+      elements.newSession.disabled = Boolean(state.activeRunId) || state.starting || state.sessionBusy;
     }
 
     async function inspectRun(runId) {
@@ -223,11 +352,13 @@ export const webUiHtml = `<!doctype html>
       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) elements.promptForm.requestSubmit();
     });
     elements.newSession.addEventListener("click", async () => {
-      if (state.activeRunId || state.starting) return;
+      if (state.activeRunId || state.starting || state.sessionBusy) return;
+      state.sessionBusy = true; syncRunControls();
       try {
         const session = await api("/v1/sessions", { method: "POST", body: "{}" });
         await loadSessions(session.id);
       } catch (error) { elements.status.textContent = error.message; }
+      finally { state.sessionBusy = false; syncRunControls(); }
     });
     elements.cancelRun.addEventListener("click", async () => {
       if (!state.activeRunId) return;
@@ -235,7 +366,45 @@ export const webUiHtml = `<!doctype html>
       catch (error) { elements.status.textContent = error.message; }
     });
 
-    Promise.all([loadRuntime(), loadSessions()]).then(() => poll()).catch((error) => {
+    elements.workflowForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await withWorkflowBusy(async () => { try {
+        const snapshot = await api("/v1/review-workflows", { method: "POST", body: JSON.stringify({
+          projectId: elements.workflowProject.value.trim(), repository: elements.workflowRepository.value.trim(),
+          baseBranch: elements.workflowBase.value.trim(), headSha: elements.workflowHead.value.trim(),
+        }) });
+        elements.workflowHead.value = "";
+        await loadWorkflows(snapshot.workflow.id);
+      } catch (error) { elements.status.textContent = error.message; } });
+    });
+    elements.riskForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!state.workflow || state.workflowBusy) return;
+      await withWorkflowBusy(async () => { try {
+        state.workflow = await api("/v1/review-workflows/" + encodeURIComponent(state.workflowId) + "/evidence", {
+          method: "POST", body: JSON.stringify({ expectedRevision: state.workflow.workflow.currentRevision,
+            evidence: { externalEventId: eventId(), type: "risk.detected", commitSha: state.workflow.workflow.headSha,
+              source: { kind: "human", id: elements.reviewActor.value.trim() || "local-user" },
+              payload: { category: elements.riskCategory.value.trim() } } }),
+        });
+        await loadWorkflows(state.workflowId);
+      } catch (error) { elements.status.textContent = error.message; } });
+    });
+    elements.headForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (!state.workflow || state.workflowBusy) return;
+      await withWorkflowBusy(async () => { try {
+        state.workflow = await api("/v1/review-workflows/" + encodeURIComponent(state.workflowId) + "/head", {
+          method: "POST", body: JSON.stringify({ expectedRevision: state.workflow.workflow.currentRevision,
+            headSha: elements.nextHead.value.trim(), externalEventId: eventId(),
+            source: { kind: "human", id: elements.reviewActor.value.trim() || "local-user" } }),
+        });
+        elements.nextHead.value = "";
+        await loadWorkflows(state.workflowId);
+      } catch (error) { elements.status.textContent = error.message; } });
+    });
+
+    Promise.all([loadRuntime(), loadSessions(), loadWorkflows()]).then(() => poll()).catch((error) => {
       elements.status.textContent = error.message;
     });
   </script>

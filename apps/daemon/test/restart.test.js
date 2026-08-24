@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
-import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -11,7 +11,9 @@ test("daemon recovers persisted session history after a process restart", async 
   const dataDirectory = mkdtempSync(join(tmpdir(), "car-daemon-"));
   const port = await availablePort();
   let daemon = await startDaemon(dataDirectory, port);
-  const sessionResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions`, { method: "POST" });
+  const sessionResponse = await fetch(`http://127.0.0.1:${port}/v1/sessions`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+  });
   assert.equal(sessionResponse.status, 201);
   const session = await sessionResponse.json();
   const webResponse = await fetch(`http://127.0.0.1:${port}/`);
@@ -175,6 +177,134 @@ test("daemon composes one explicitly configured remote MCP plugin", async () => 
   }
 });
 
+test("daemon exposes a durable adaptive review workflow through HTTP and the web UI", async () => {
+  const dataDirectory = mkdtempSync(join(tmpdir(), "car-daemon-review-"));
+  const port = await availablePort();
+  const head = "a".repeat(40);
+  let daemon = await startDaemon(dataDirectory, port);
+  try {
+    const web = await (await fetch(`http://127.0.0.1:${port}/`)).text();
+    assert.match(web, /Review workflows/);
+    assert.match(web, /Create workflow/);
+    assert.match(web, /workflowBusy/);
+    assert.match(web, /stage\.evidence\.acceptedSourceKinds/);
+    assert.match(web, /authoritativeKinds/);
+    const capabilities = await (await fetch(`http://127.0.0.1:${port}/v1/capabilities`)).json();
+    assert.deepEqual(capabilities.reviewWorkflowProviders, [
+      { id: "core.review.adaptive", version: "1" },
+      { id: "core.review.declarative", version: "1" },
+    ]);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/v1/review-workflows`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: "null",
+    })).status, 400);
+    let snapshot = await jsonRequest(port, "/v1/review-workflows", {
+      method: "POST", body: { projectId: "car", repository: "dim/car", baseBranch: "main", headSha: head },
+      expectedStatus: 201,
+    });
+    const workflowId = snapshot.workflow.id;
+    const stageEvidence = {
+      "base-protection": { type: "git.base.protected", source: { kind: "git-host", id: "gitea" } },
+      implementation: { type: "implementation.completed", source: { kind: "agent", id: "implementer" } },
+      "pull-request": { type: "git.pull-request.opened", source: { kind: "git-host", id: "gitea" } },
+      "automated-checks": { type: "check.passed", source: { kind: "ci", id: "verify" } },
+      "security-review": { type: "review.agent.approved", source: { kind: "agent", id: "security" } },
+      "code-review": { type: "review.agent.approved", source: { kind: "agent", id: "reviewer" } },
+      "human-approval": { type: "review.human.approved", source: { kind: "human", id: "alice" } },
+    };
+    for (const stageId of ["base-protection", "implementation", "pull-request", "automated-checks"]) {
+      snapshot = await completeReviewStage(port, snapshot, stageId, { ...stageEvidence[stageId], commitSha: head });
+    }
+    snapshot = await jsonRequest(port, `/v1/review-workflows/${workflowId}/evidence`, { method: "POST", body: {
+      expectedRevision: snapshot.workflow.currentRevision,
+      evidence: { externalEventId: "daemon-risk", type: "risk.detected", commitSha: head,
+        source: { kind: "tool", id: "classifier" },
+        payload: { category: "security" } },
+    } });
+    assert.equal(snapshot.current.plan.stages.some((stage) => stage.id === "security-review"), true);
+    const blocked = await jsonRequest(port, `/v1/review-workflows/${workflowId}/stages/code-review/complete`, {
+      method: "POST", body: { expectedRevision: snapshot.workflow.currentRevision,
+        evidence: { externalEventId: "daemon-blocked-review", ...stageEvidence["code-review"], commitSha: head } },
+      expectedStatus: 409,
+    });
+    assert.equal(blocked.code, "conflict");
+    const unchanged = await jsonRequest(port, `/v1/review-workflows/${workflowId}`);
+    assert.equal(unchanged.workflow.currentRevision, snapshot.workflow.currentRevision);
+    assert.equal(unchanged.historyCounts.evidence, snapshot.historyCounts.evidence);
+
+    for (const stageId of ["security-review", "code-review", "human-approval"]) {
+      snapshot = await completeReviewStage(port, snapshot, stageId, { ...stageEvidence[stageId], commitSha: head });
+    }
+    assert.equal(snapshot.mergeReadiness.ready, true);
+    assert.equal(snapshot.mergeReadiness.publishable, false);
+    assert.equal((await jsonRequest(port, "/v1/review-workflows?limit=10"))[0].workflow.id, workflowId);
+    await stopDaemon(daemon, "SIGKILL");
+
+    daemon = await startDaemon(dataDirectory, port);
+    snapshot = await jsonRequest(port, `/v1/review-workflows/${workflowId}`);
+    assert.equal(snapshot.mergeReadiness.ready, true);
+    assert.equal(snapshot.historyCounts.revisions, snapshot.workflow.currentRevision);
+    const history = await jsonRequest(port, `/v1/review-workflows/${workflowId}/history?limit=2`);
+    assert.equal(history.revisions.length, 2);
+    assert.equal(typeof history.nextBeforeRevision, "number");
+    const nextHead = "b".repeat(40);
+    snapshot = await jsonRequest(port, `/v1/review-workflows/${workflowId}/head`, { method: "POST", body: {
+      expectedRevision: snapshot.workflow.currentRevision, headSha: nextHead, externalEventId: "daemon-head-change",
+      source: { kind: "human", id: "alice" },
+    } });
+    assert.equal(snapshot.workflow.headSha, nextHead);
+    assert.equal(snapshot.mergeReadiness.ready, false);
+    assert.equal(snapshot.stages.every((stage) => stage.state !== "completed"), true);
+
+    const declarativeStages = [
+      { id: "base", label: "Base", kind: "protected-base", required: true, dependsOn: [],
+        evidence: { type: "git.base.protected", acceptedSourceKinds: ["git-host"] } },
+      { id: "team:implementation", label: "Team implementation", kind: "implementation", required: true, dependsOn: [],
+        evidence: { type: "implementation.completed", acceptedSourceKinds: ["agent"] } },
+      { id: "pull", label: "PR", kind: "pull-request", required: true, dependsOn: ["team:implementation"],
+        evidence: { type: "git.pull-request.opened", acceptedSourceKinds: ["git-host"] } },
+      { id: "approval", label: "Approval", kind: "human-approval", required: true, dependsOn: ["base", "pull"],
+        evidence: { type: "review.human.approved", acceptedSourceKinds: ["human"] } },
+    ];
+    let declarative = await jsonRequest(port, "/v1/review-workflows", { method: "POST", expectedStatus: 201, body: {
+      projectId: "colon", repository: "dim/colon", baseBranch: "main", headSha: head,
+      provider: { id: "core.review.declarative", configuration: { stages: declarativeStages } },
+    } });
+    declarative = await jsonRequest(port, `/v1/review-workflows/${declarative.workflow.id}/stages/team%3Aimplementation/complete`, {
+      method: "POST", body: { expectedRevision: declarative.workflow.currentRevision,
+        evidence: { externalEventId: "colon-stage", type: "implementation.completed", commitSha: head,
+          source: { kind: "agent", id: "team" }, payload: {} } },
+    });
+    assert.equal(declarative.stages.find((stage) => stage.stage.id === "team:implementation").state, "completed");
+    assert.equal((await fetch(`http://127.0.0.1:${port}/v1/review-workflows/%E0%A4%A`)).status, 400);
+  } finally {
+    if (daemon.exitCode === null) await stopDaemon(daemon);
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
+test("daemon rejects cross-origin, rebinding, non-JSON, and oversized mutation requests", async () => {
+  const dataDirectory = mkdtempSync(join(tmpdir(), "car-daemon-authority-"));
+  const port = await availablePort();
+  const daemon = await startDaemon(dataDirectory, port);
+  const endpoint = `http://127.0.0.1:${port}/v1/sessions`;
+  try {
+    assert.equal((await fetch(endpoint, { method: "POST", headers: { "content-type": "text/plain" }, body: "{}" })).status, 400);
+    assert.equal((await fetch(endpoint, { method: "POST", headers: {
+      "content-type": "application/json", origin: "https://evil.example",
+    }, body: "{}" })).status, 400);
+    assert.equal(await rawStatus(port, "/health", { host: "evil.example" }), 400);
+    assert.equal((await fetch(endpoint, { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ padding: "x".repeat(129 * 1024) }) })).status, 400);
+    const allowed = await fetch(endpoint, { method: "POST", headers: {
+      "content-type": "application/json", origin: `http://127.0.0.1:${port}`,
+    }, body: "{}" });
+    assert.equal(allowed.status, 201);
+  } finally {
+    await stopDaemon(daemon);
+    rmSync(dataDirectory, { recursive: true, force: true });
+  }
+});
+
 async function availablePort() {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -219,4 +349,32 @@ async function waitForRun(port, runId) {
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`run did not finish: ${runId}`);
+}
+
+async function jsonRequest(port, path, options = {}) {
+  const response = await fetch(`http://127.0.0.1:${port}${path}`, {
+    method: options.method ?? "GET",
+    headers: { "content-type": "application/json" },
+    ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+  });
+  assert.equal(response.status, options.expectedStatus ?? 200, `${response.status} ${path}: ${await response.clone().text()}`);
+  return response.json();
+}
+
+async function rawStatus(port, path, headers) {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({ hostname: "127.0.0.1", port, path, headers }, (response) => {
+      response.resume();
+      response.on("end", () => resolve(response.statusCode));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+async function completeReviewStage(port, snapshot, stageId, stageEvidence) {
+  return jsonRequest(port, `/v1/review-workflows/${snapshot.workflow.id}/stages/${stageId}/complete`, {
+    method: "POST", body: { expectedRevision: snapshot.workflow.currentRevision,
+      evidence: { externalEventId: `daemon-stage-${stageId}`, ...stageEvidence } },
+  });
 }
